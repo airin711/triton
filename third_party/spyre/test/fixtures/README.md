@@ -12,11 +12,29 @@ TTIR → KTIR pipeline in the test suite.
   README.md       # (optional) what this kernel exercises
 ```
 
-`test/conftest.py::_load_examples` globs `test/fixtures/*/meta.py`,
-imports each as a package-qualified module (so `from . import kernel`
-works), and expands each `VARIANTS` dict into registry entries. The
-`TestExample` class in `test/test_ktir_examples.py` parametrizes over
-every discovered variant.
+A folder may also be a bare grouping directory with no `meta.py` of its
+own, nesting real fixture folders underneath it (e.g. to group kernels
+traced from a specific model):
+
+```
+<group>/
+  __init__.py
+  <name>/
+    kernel.py
+    meta.py
+```
+
+`test/conftest.py::_load_examples` globs `test/fixtures/**/meta.py`
+(any depth), imports each as a package-qualified module (so `from .
+import kernel` works — every intermediate directory, including bare
+grouping ones, needs an `__init__.py`), and expands each `VARIANTS`
+dict into registry entries. Directory names containing characters that
+aren't valid in a Python identifier (e.g. `Meta-Llama-3.1-8B-Instruct`)
+are sanitized (non-word characters replaced with `_`) for the internal
+dotted module name only — the real filesystem path is untouched, and
+this has no effect on registry keys. The `TestExample` class in
+`test/test_ktir_examples.py` parametrizes over every discovered
+variant.
 
 Each folder holds one **mathematical function**. Different
 implementations of the same function (algorithms, shape flavors,
@@ -33,7 +51,10 @@ reference oracle and input generator. Different functions
   change `constexpr` (or `params`) replaces the whole list / dict.
 - Registry keys: `<folder>` for the default variant and for
   single-variant kernels; `<folder>__<variant>` for every other entry.
-  e.g. `vector_add`, `vector_add__dynamic`.
+  e.g. `vector_add`, `vector_add__dynamic`. `<folder>` is the meta.py's
+  directory path relative to `fixtures/`, as a POSIX string — for a
+  nested fixture this includes the grouping directory, e.g.
+  `Meta-Llama-3.1-8B-Instruct/torch.add.1_spyre`.
 
 ## Field reference
 

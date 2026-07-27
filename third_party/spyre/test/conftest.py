@@ -21,7 +21,7 @@ setup here runs first — test files need no path boilerplate of their own.
 Quick-reference
 ---------------
 - :data:`EXAMPLES`              — registry of example kernels discovered
-                                  from ``test/fixtures/*/meta.py``
+                                  from ``test/fixtures/**/meta.py``
 - :class:`KTIRStructuralTester` — EXAMPLE-based setup + structural assertions
 - :class:`KTIRCpuTester`        — extends with numerical CPU execution
 - :class:`SinglePassTester`     — run one pass on inline MLIR text
@@ -103,9 +103,12 @@ from utils import (  # noqa: E402
 # ---------------------------------------------------------------------------
 # EXAMPLES — registry of example kernels used by tests
 #
-# Populated by discovery over test/fixtures/*/meta.py: each meta.py exports
+# Populated by discovery over test/fixtures/**/meta.py: each meta.py exports
 # a ``VARIANTS`` dict that gets expanded into one entry per variant, plus
-# any reference/oracle helpers used by those variants.
+# any reference/oracle helpers used by those variants. Fixture folders may
+# nest arbitrarily deep (e.g. grouping by traced model name); the registry
+# key is the meta.py's directory path relative to fixtures/, as a POSIX
+# string (e.g. "vector_add" or "Meta-Llama-3.1-8B-Instruct/torch.add.1_spyre").
 #
 # Per-variant entry shape (whichever fields the variant supplies):
 #   kernel_fn     : @triton.jit function compiled on demand
@@ -129,31 +132,49 @@ from utils import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 
+def _sanitize_pkg_segment(name: str) -> str:
+    """Turn a directory name into a valid dotted-module-name segment.
+
+    Fixture folders may nest under names with dots/hyphens (e.g. a traced
+    model dir like ``Meta-Llama-3.1-8B-Instruct``) that would otherwise
+    split into extra (bogus) package levels or produce invalid identifiers
+    when used verbatim in a dotted module name. The real filesystem path is
+    unaffected — only the ``sys.modules`` key / dotted name is sanitized.
+    """
+    return re.sub(r"\W", "_", name)
+
+
 def _import_meta(meta_path: Path):
-    """Import ``test/fixtures/<name>/meta.py`` as a package-qualified module.
+    """Import ``test/fixtures/<...>/meta.py`` as a package-qualified module.
 
     The meta.py uses ``from . import kernel``, so we must import it as a
-    member of the ``fixtures.<name>`` package — bootstrap the parent
-    package first.
+    member of the ``fixtures[.<...>]`` package — bootstrap each parent
+    package first, walking arbitrarily many intermediate directories (a
+    fixture may be nested, e.g. grouped under a traced model name).
     """
-    # Pre-register parents so relative imports in meta.py resolve.
-    for parent_dir, pkg_name in [
-        (_FIXTURES_DIR, "fixtures"),
-        (meta_path.parent, f"fixtures.{meta_path.parent.name}"),
-    ]:
-        if pkg_name in sys.modules:
+    rel_parts = meta_path.parent.relative_to(_FIXTURES_DIR).parts
+
+    pkg_dir = _FIXTURES_DIR
+    pkg_name = "fixtures"
+    dirs_and_names = [(pkg_dir, pkg_name)]
+    for part in rel_parts:
+        pkg_dir = pkg_dir / part
+        pkg_name = f"{pkg_name}.{_sanitize_pkg_segment(part)}"
+        dirs_and_names.append((pkg_dir, pkg_name))
+
+    for parent_dir, name in dirs_and_names:
+        if name in sys.modules:
             continue
         spec = importlib.util.spec_from_file_location(
-            pkg_name, parent_dir / "__init__.py",
+            name, parent_dir / "__init__.py",
             submodule_search_locations=[str(parent_dir)],
         )
         mod = importlib.util.module_from_spec(spec)
-        sys.modules[pkg_name] = mod
+        sys.modules[name] = mod
         if spec.loader is not None:
             spec.loader.exec_module(mod)
 
-    name = meta_path.parent.name
-    mod_name = f"fixtures.{name}.meta"
+    mod_name = f"{pkg_name}.meta"
     spec = importlib.util.spec_from_file_location(mod_name, meta_path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[mod_name] = mod
@@ -217,9 +238,10 @@ def _load_examples():
     registry: dict = {}
     if not _FIXTURES_DIR.exists():
         return registry
-    # Only folders with a meta.py qualify as kernel examples.
-    for meta_path in sorted(_FIXTURES_DIR.glob("*/meta.py")):
-        name = meta_path.parent.name
+    # Only folders with a meta.py qualify as kernel examples. Nesting is
+    # arbitrary depth (e.g. fixtures grouped under a traced model name).
+    for meta_path in sorted(_FIXTURES_DIR.glob("**/meta.py")):
+        name = meta_path.parent.relative_to(_FIXTURES_DIR).as_posix()
         mod = _import_meta(meta_path)
         module_sig = getattr(mod, "SIGNATURE", {})
         variants = mod.VARIANTS
