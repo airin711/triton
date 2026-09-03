@@ -163,6 +163,40 @@ def LowerComputeOps : Pass<"lower-compute-ops", "mlir::ModuleOp"> {
     ];
 }
 
+def LowerSpyreOps : Pass<"lower-spyre-ops", "mlir::ModuleOp"> {
+    let summary = "Lower scalar math ops to spyreop dialect intrinsics.";
+    let description = [{
+        Input: any IR containing scalar math ops — typically the body of a
+        linalg.generic after ConvertElementwiseToLinalg has scalarized a
+        tensor-level math op. spyreop's intrinsics are scalar-only
+        (f16/df16/f32), so a math op still on a tensor or vector is left
+        alone rather than matched — this pass is not the one that will
+        eventually convert it.
+
+        Lowering:
+        - math.sqrt (operand f16 or f32) → spyreop.sqrt
+
+        A math.sqrt still on a tensor/vector is left legal, quietly, since
+        ConvertElementwiseToLinalg (not this pass) is what will eventually
+        scalarize it. A math.sqrt already scalar but on any other type
+        (f64, bf16, ...) has no spyreop intrinsic to lower to and is left
+        illegal, reported with a diagnostic rather than silently skipped.
+
+        Ordering: must run after ConvertElementwiseToLinalg for a kernel
+        that computes sqrt over a tensor -- anchored earlier, the op is
+        still tensor-typed and left alone, never reaching spyreop.sqrt.
+
+        Output: no math.sqrt on scalar f16/f32 remains; spyreop.sqrt
+        introduced in its place. math.sqrt on a tensor/vector, and every
+        other math op, pass through unchanged.
+    }];
+
+    let dependentDialects = [
+        "mlir::spyreop::SpyreOpDialect",
+        "mlir::math::MathDialect"
+    ];
+}
+
 def UnaliasLinalgOuts : Pass<"unalias-linalg-outs", "mlir::ModuleOp"> {
     let summary = "Replace a linalg 'outs' operand that aliases an 'ins' operand "
                   "with a fresh tensor.empty.";
