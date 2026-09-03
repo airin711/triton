@@ -409,19 +409,30 @@ class SpyreBackend(BaseBackend):
         if parsed.get("base_addresses") and "symbolic_args" not in options:
             parsed["symbolic_args"] = False
 
-        # The two fix passes the scheduler inside dbo-opt requires of every kernel
-        # it will lower to a binary.  Merged under the caller's own entries so an
-        # explicit override of a specific anchor still wins, but a caller that
-        # passes nothing still gets them.
+        # The fix passes every kernel gets by default. Merged under the caller's
+        # own entries so an explicit override of a specific anchor still wins, but
+        # a caller that passes nothing still gets them.
         #
         # The anchor is rewrite_descriptor_layout, not lower_compute_ops.
         # lower_compute_ops builds a linalg.generic with logical types before the
         # layout pass physicalizes the descriptor to its stick shape; the types then
         # disagree and the pipeline aborts.  rewrite_descriptor_layout runs after
         # that physicalization, so the fixes see consistent types.
+        #
+        # convert_elementwise_to_linalg and unalias_linalg_outs are what the
+        # scheduler inside dbo-opt requires of every kernel it will lower to a
+        # binary. lower_spyre_ops runs after them, in that dict order, so it sees
+        # convert_elementwise_to_linalg's scalarized linalg.generic body and can
+        # match a scalar math op inside it -- e.g. math.sqrt on a tensor becomes
+        # spyreop.sqrt once it is scalar. Its cost: a scalar math op on a type
+        # spyreop has no intrinsic for (f64, bf16, ...) used to pass through this
+        # pipeline untouched; now LowerSpyreOps reports it and the compile fails
+        # instead. Accepted for now -- softening that (leaving an unsupported
+        # scalar type alone instead of erroring) is separate follow-up work.
         parsed["required_fixes"] = {
             "convert_elementwise_to_linalg": "rewrite_descriptor_layout",
             "unalias_linalg_outs":           "rewrite_descriptor_layout",
+            "lower_spyre_ops":               "rewrite_descriptor_layout",
             **parsed.get("required_fixes", {}),
         }
         return SpyreOptions(**parsed)
