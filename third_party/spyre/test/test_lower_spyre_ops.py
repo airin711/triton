@@ -111,6 +111,309 @@ class TestSqrt(LowerSpyreOpsTester):
 
 
 # =========================================================================
+# math.exp -> spyreop.exp
+# =========================================================================
+
+class TestExp(LowerSpyreOpsTester):
+    @pattern("math-exp", category="compute", example=[
+        "y = tl.exp(x)  # math.exp on a scalar",
+    ])
+    def test_f32(self):
+        self.run("""
+        module {
+          tt.func @k(%s: f32) -> f32 {
+            %0 = math.exp %s : f32
+            tt.return %0 : f32
+          }
+        }
+        """)
+        self.assert_present("spyreop.exp")
+        self.assert_absent("math.exp")
+        self.assert_result_type("spyreop.exp", "f32")
+
+    def test_tensor_operand_untouched(self):
+        self.run("""
+        module {
+          tt.func @k(%t: tensor<4xf32>) -> tensor<4xf32> {
+            %0 = math.exp %t : tensor<4xf32>
+            tt.return %0 : tensor<4xf32>
+          }
+        }
+        """)
+        self.assert_present("math.exp")
+        self.assert_absent("spyreop.exp")
+
+    @pattern("math-exp-unsupported-type", category="compute", negative=True,
+             example=[
+                 "# Not yet supported: math.exp on f64",
+                 "y = tl.exp(x)  # x: f64",
+             ])
+    def test_f64_fails(self, capfd):
+        with pytest.raises(RuntimeError, match="PassManager::run failed"):
+            self.run("""
+            module {
+              tt.func @k(%s: f64) -> f64 {
+                %0 = math.exp %s : f64
+                tt.return %0 : f64
+              }
+            }
+            """)
+        self.assert_stderr(capfd,
+            "failed to legalize operation 'math.exp'",
+            "LowerSpyreOps: failed to convert math ops",
+        )
+
+
+# =========================================================================
+# math.rsqrt -> spyreop.rsqrt
+# =========================================================================
+
+class TestRsqrt(LowerSpyreOpsTester):
+    @pattern("math-rsqrt", category="compute", example=[
+        "y = tl.rsqrt(x)  # math.rsqrt on a scalar",
+    ])
+    def test_f32(self):
+        self.run("""
+        module {
+          tt.func @k(%s: f32) -> f32 {
+            %0 = math.rsqrt %s : f32
+            tt.return %0 : f32
+          }
+        }
+        """)
+        self.assert_present("spyreop.rsqrt")
+        self.assert_absent("math.rsqrt")
+        self.assert_result_type("spyreop.rsqrt", "f32")
+
+    def test_tensor_operand_untouched(self):
+        self.run("""
+        module {
+          tt.func @k(%t: tensor<4xf32>) -> tensor<4xf32> {
+            %0 = math.rsqrt %t : tensor<4xf32>
+            tt.return %0 : tensor<4xf32>
+          }
+        }
+        """)
+        self.assert_present("math.rsqrt")
+        self.assert_absent("spyreop.rsqrt")
+
+    @pattern("math-rsqrt-unsupported-type", category="compute", negative=True,
+             example=[
+                 "# Not yet supported: math.rsqrt on f64",
+                 "y = tl.rsqrt(x)  # x: f64",
+             ])
+    def test_f64_fails(self, capfd):
+        with pytest.raises(RuntimeError, match="PassManager::run failed"):
+            self.run("""
+            module {
+              tt.func @k(%s: f64) -> f64 {
+                %0 = math.rsqrt %s : f64
+                tt.return %0 : f64
+              }
+            }
+            """)
+        self.assert_stderr(capfd,
+            "failed to legalize operation 'math.rsqrt'",
+            "LowerSpyreOps: failed to convert math ops",
+        )
+
+
+# =========================================================================
+# arith.divf -> spyreop.realdiv
+# =========================================================================
+
+class TestRealDiv(LowerSpyreOpsTester):
+    @pattern("arith-divf", category="compute", example=[
+        "y = x / z  # arith.divf on scalars",
+    ])
+    def test_f32(self):
+        self.run("""
+        module {
+          tt.func @k(%a: f32, %b: f32) -> f32 {
+            %0 = arith.divf %a, %b : f32
+            tt.return %0 : f32
+          }
+        }
+        """)
+        self.assert_present("spyreop.realdiv")
+        self.assert_absent("arith.divf")
+        self.assert_result_type("spyreop.realdiv", "f32")
+
+    def test_tensor_operand_untouched(self):
+        self.run("""
+        module {
+          tt.func @k(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
+            %0 = arith.divf %a, %b : tensor<4xf32>
+            tt.return %0 : tensor<4xf32>
+          }
+        }
+        """)
+        self.assert_present("arith.divf")
+        self.assert_absent("spyreop.realdiv")
+
+    @pattern("arith-divf-unsupported-type", category="compute", negative=True,
+             example=[
+                 "# Not yet supported: arith.divf on f64",
+                 "y = x / z  # x, z: f64",
+             ])
+    def test_f64_fails(self, capfd):
+        with pytest.raises(RuntimeError, match="PassManager::run failed"):
+            self.run("""
+            module {
+              tt.func @k(%a: f64, %b: f64) -> f64 {
+                %0 = arith.divf %a, %b : f64
+                tt.return %0 : f64
+              }
+            }
+            """)
+        self.assert_stderr(capfd,
+            "failed to legalize operation 'arith.divf'",
+            "LowerSpyreOps: failed to convert math ops",
+        )
+
+
+# =========================================================================
+# arith.addi / arith.muli -> spyreop.{addi32toi32,addi64toi64,muli32toi32}
+#
+# Unlike the math ops above, plain scalar integer add/mul is also used for
+# loop indices, offsets, and tile addressing -- not just scalarized tensor
+# compute. So these patterns only match inside a linalg.generic body (the
+# structural signal ConvertElementwiseToLinalg leaves behind), and only at
+# the bit-widths spyreop has an intrinsic for. Anything else (a different
+# width, or arith.addi/muli outside a linalg.generic entirely) is left
+# legal rather than reported -- there is no accepted-regression tradeoff
+# here the way there is for an unsupported float type above.
+# =========================================================================
+
+def _generic_i32_body(op: str) -> str:
+    return f"""
+    module {{
+      tt.func @k(%t: tensor<4xi32>) -> tensor<4xi32> {{
+        %init = tensor.empty() : tensor<4xi32>
+        %0 = linalg.generic {{
+            indexing_maps = [affine_map<(d0) -> (d0)>, affine_map<(d0) -> (d0)>],
+            iterator_types = ["parallel"]}}
+            ins(%t : tensor<4xi32>) outs(%init : tensor<4xi32>) {{
+        ^bb0(%in: i32, %out: i32):
+          %1 = {op} %in, %in : i32
+          linalg.yield %1 : i32
+        }} -> tensor<4xi32>
+        tt.return %0 : tensor<4xi32>
+      }}
+    }}
+    """
+
+
+class TestAddIToSpyreInt(LowerSpyreOpsTester):
+    @pattern("arith-addi-i32", category="compute", example=[
+        "y = x + x  # arith.addi i32, scalarized inside a linalg.generic",
+    ])
+    def test_i32_inside_generic(self):
+        self.run(_generic_i32_body("arith.addi"))
+        self.assert_present("spyreop.addi32toi32", parent="linalg.generic")
+        self.assert_absent("arith.addi")
+
+    def test_i64_inside_generic(self):
+        self.run("""
+        module {
+          tt.func @k(%t: tensor<4xi64>) -> tensor<4xi64> {
+            %init = tensor.empty() : tensor<4xi64>
+            %0 = linalg.generic {
+                indexing_maps = [affine_map<(d0) -> (d0)>, affine_map<(d0) -> (d0)>],
+                iterator_types = ["parallel"]}
+                ins(%t : tensor<4xi64>) outs(%init : tensor<4xi64>) {
+            ^bb0(%in: i64, %out: i64):
+              %1 = arith.addi %in, %in : i64
+              linalg.yield %1 : i64
+            } -> tensor<4xi64>
+            tt.return %0 : tensor<4xi64>
+          }
+        }
+        """)
+        self.assert_present("spyreop.addi64toi64", parent="linalg.generic")
+        self.assert_absent("arith.addi")
+
+    def test_i16_inside_generic_untouched(self):
+        """i16 has no spyreop add intrinsic -- left legal, not reported."""
+        self.run("""
+        module {
+          tt.func @k(%t: tensor<4xi16>) -> tensor<4xi16> {
+            %init = tensor.empty() : tensor<4xi16>
+            %0 = linalg.generic {
+                indexing_maps = [affine_map<(d0) -> (d0)>, affine_map<(d0) -> (d0)>],
+                iterator_types = ["parallel"]}
+                ins(%t : tensor<4xi16>) outs(%init : tensor<4xi16>) {
+            ^bb0(%in: i16, %out: i16):
+              %1 = arith.addi %in, %in : i16
+              linalg.yield %1 : i16
+            } -> tensor<4xi16>
+            tt.return %0 : tensor<4xi16>
+          }
+        }
+        """)
+        self.assert_present("arith.addi")
+        self.assert_absent("spyreop.addi32toi32", "spyreop.addi64toi64")
+
+    def test_i32_outside_generic_untouched(self):
+        """Plain scalar arith.addi outside any linalg.generic is index/address
+        arithmetic, not scalarized compute -- must be left alone.
+        """
+        self.run("""
+        module {
+          tt.func @k(%a: i32, %b: i32) -> i32 {
+            %0 = arith.addi %a, %b : i32
+            tt.return %0 : i32
+          }
+        }
+        """)
+        self.assert_present("arith.addi")
+        self.assert_absent("spyreop.addi32toi32")
+
+
+class TestMulIToSpyreInt(LowerSpyreOpsTester):
+    @pattern("arith-muli-i32", category="compute", example=[
+        "y = x * x  # arith.muli i32, scalarized inside a linalg.generic",
+    ])
+    def test_i32_inside_generic(self):
+        self.run(_generic_i32_body("arith.muli"))
+        self.assert_present("spyreop.muli32toi32", parent="linalg.generic")
+        self.assert_absent("arith.muli")
+
+    def test_i64_inside_generic_untouched(self):
+        """No spyreop.muli64toi64 intrinsic exists -- i64 is left legal."""
+        self.run("""
+        module {
+          tt.func @k(%t: tensor<4xi64>) -> tensor<4xi64> {
+            %init = tensor.empty() : tensor<4xi64>
+            %0 = linalg.generic {
+                indexing_maps = [affine_map<(d0) -> (d0)>, affine_map<(d0) -> (d0)>],
+                iterator_types = ["parallel"]}
+                ins(%t : tensor<4xi64>) outs(%init : tensor<4xi64>) {
+            ^bb0(%in: i64, %out: i64):
+              %1 = arith.muli %in, %in : i64
+              linalg.yield %1 : i64
+            } -> tensor<4xi64>
+            tt.return %0 : tensor<4xi64>
+          }
+        }
+        """)
+        self.assert_present("arith.muli")
+        self.assert_absent("spyreop.muli32toi32")
+
+    def test_i32_outside_generic_untouched(self):
+        self.run("""
+        module {
+          tt.func @k(%a: i32, %b: i32) -> i32 {
+            %0 = arith.muli %a, %b : i32
+            tt.return %0 : i32
+          }
+        }
+        """)
+        self.assert_present("arith.muli")
+        self.assert_absent("spyreop.muli32toi32")
+
+
+# =========================================================================
 # lower_spyre_ops as a default required_fix (SpyreBackend.parse_options)
 #
 # TestSqrt above runs LowerSpyreOps in isolation. These drive the real

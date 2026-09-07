@@ -337,6 +337,10 @@ class VariantFactory:
         """-> the ``inputs`` generator, ``(**param_values) -> {name: array}``."""
         return None
 
+    def xfail_numerical(self, **combo):
+        """-> the ``xfail_numerical`` field (``str`` or ``dict``), or ``None``."""
+        return None
+
     def declares(self, hook: str) -> bool:
         """Whether *hook* is overridden here rather than inherited."""
         return getattr(type(self), hook) is not getattr(VariantFactory, hook)
@@ -345,9 +349,10 @@ class VariantFactory:
 # Hook name → the field it produces. A table because ``SIGNATURE`` is uppercase
 # by fixture convention, and ``def SIGNATURE(self, ...)`` would read worse.
 _FACTORY_HOOKS = {
-    "signature": "SIGNATURE",
-    "reference": "reference",
-    "inputs":    "inputs",
+    "signature":       "SIGNATURE",
+    "reference":       "reference",
+    "inputs":          "inputs",
+    "xfail_numerical": "xfail_numerical",
 }
 
 
