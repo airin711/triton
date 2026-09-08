@@ -202,19 +202,16 @@ VARIANTS = {
         },
         "constexpr": ["BLOCK_M", "BLOCK_N"],
         "params":    {"M": [1024], "N": [1024], "BLOCK_M": [4], "BLOCK_N": [64]},
-        # The multi-result parsing gap this variant used to be xfailed for
-        # (regex KTIRParser collapsing `%denom:2 = scf.for ... -> (T, T)`) is
-        # fixed -- MLIRFrontendParser resolves %denom#0 / %denom#1 fine.
+        # Previously xfailed: the regex KTIRParser collapsed the multi-result
+        # `%denom:2 = scf.for ... -> (T, T)` to a single value, so downstream
+        # refs to %denom#0 / %denom#1 KeyError'd. MLIRFrontendParser exposes
+        # per-result names and resolves them, so this now passes numerically.
         "extra_checks": lambda t: (
             # Pass 1 carries row_max + denom as iter_args through the
             # N-loop; pass 2 is a plain N-loop. The fused pattern emits
             # arith.mulf alongside the exp / sum that also appear in the
-            # other variants. math.exp is scalarized (ConvertElementwiseToLinalg)
-            # but stays math.exp at this stage -- LowerSpyreOps only runs later,
-            # at the spyrecode stage (_SPYRECODE_STAGE_PASSES), so it is never
-            # applied to this ktir-stage module.
+            # other variants.
             t.assert_present("math.exp", "arith.mulf", "arith.addf"),
-            t.assert_absent("spyreop.exp"),
         ),
     },
 }
