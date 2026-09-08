@@ -222,6 +222,9 @@ struct LowerSpyreOpsPass
       return !isInsideLinalgGeneric(op) ||
              getScalarIntBitWidth(op.getType()) != 32;
     });
+    target.addLegalDialect<spyreop::SpyreOpDialect>();
+    target.addLegalOp<ModuleOp>();
+
     // No TypeConverter is installed, so adaptor operands are the original
     // ones, for every pattern below.
     RewritePatternSet patterns(ctx);
