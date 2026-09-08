@@ -48,7 +48,7 @@ namespace {
 
 /// Whether spyreop's scalar float intrinsics accept this operand type.
 static bool isSpyreOpScalarType(Type type) {
-  return isa<Float16Type, Float32Type, spyreop::DF16Type>(type);
+  return isa<Float16Type, Float32Type>(type);
 }
 
 /// Whether this op is (transitively) inside a linalg.generic body -- the
@@ -157,8 +157,6 @@ struct ConvertArithAddI : public OpConversionPattern<arith::AddIOp> {
     else if (width == 64)
       rewriter.replaceOpWithNewOp<spyreop::AddI64ToI64>(
           op, op.getType(), adaptor.getLhs(), adaptor.getRhs());
-    else
-      return failure();
     return success();
   }
 };
@@ -224,9 +222,8 @@ struct LowerSpyreOpsPass
       return !isInsideLinalgGeneric(op) ||
              getScalarIntBitWidth(op.getType()) != 32;
     });
-    target.addLegalDialect<spyreop::SpyreOpDialect>();
-    target.addLegalOp<ModuleOp>();
-
+    // No TypeConverter is installed, so adaptor operands are the original
+    // ones, for every pattern below.
     RewritePatternSet patterns(ctx);
     patterns.add<ConvertMathSqrt, ConvertMathExp, ConvertMathRsqrt,
                  ConvertArithDivF, ConvertArithAddI, ConvertArithMulI>(ctx);
