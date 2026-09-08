@@ -229,17 +229,6 @@ class Elementwise(conftest.VariantFactory):
         return functools.partial({1: make_inputs, 2: make_inputs_2d}[self.rank],
                                  nonzero_y=True)
 
-    def xfail_numerical(self, OP, DTYPE="fp32", **_):
-        """``div`` (any dtype) and i32 ``add``/``mul`` reach ``ktir_cpu`` as
-        ``spyreop.realdiv`` / ``spyreop.addi32toi32`` / ``spyreop.muli32toi32``
-        (LowerSpyreOps, #107) -- ops the oracle interpreter has no
-        ``MLIRTypeAdapter`` handler for yet.
-        """
-        if OP == "div" or (DTYPE == "i32" and OP in ("add", "mul")):
-            return (f"ktir_cpu has no spyreop.* MLIRTypeAdapter handler yet "
-                     f"(#107); OP={OP!r} DTYPE={DTYPE!r} lowers through it")
-        return None
-
 
 # ---------------------------------------------------------------------------
 # SIGNATURE — dtype per @triton.jit arg. Purely types; values live in the
@@ -737,12 +726,10 @@ VARIANTS = {
     #
     # The op x dtype product on ktir_cpu. Deliberately the simplest shape in
     # the file -- 1D, static, one tile, no layout -- so arithmetic is the only
-    # thing that differs between its entries. LowerSpyreOps (#107) now emits
-    # the spyreop spellings dbo-opt wants for div and the i32 arms, but
-    # ktir_cpu -- the numerical oracle this variant's own test runs against --
-    # has no MLIRTypeAdapter handler for any spyreop.* op yet, so those combos
-    # are xfail_numerical'd (Elementwise.xfail_numerical) rather than
-    # reachable end to end.
+    # thing that differs between its entries. LowerSpyreOps (#107) only runs
+    # at the spyrecode stage (_SPYRECODE_STAGE_PASSES), after ktir_cpu's own
+    # module is already built, so this variant's math/arith ops stay in their
+    # plain dialect spelling and every combo is reachable end to end.
     # -----------------------------------------------------------------------
     "1d_compute": {
         # No base: prevent inheriting `reference` and `inputs` from `default`
@@ -753,9 +740,7 @@ VARIANTS = {
                  "program-id-1d", "elementwise-compute"],
         "summary": (
             "1D elementwise op across fp16/fp32/i32 and add/sub/mul/div. "
-            "Sweeps the OP × DTYPE product to cover ktir_cpu correctness; "
-            "div and i32 add/mul are xfail_numerical'd pending a ktir_cpu "
-            "spyreop.* handler (#107)."
+            "Sweeps the OP × DTYPE product to cover ktir_cpu correctness."
         ),
         "kernel_fn":    kernel.elementwise_1d,
         "factory":      Elementwise(rank=1),

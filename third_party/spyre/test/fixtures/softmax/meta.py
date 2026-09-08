@@ -118,9 +118,6 @@ VARIANTS = {
         # f16 softmax: computation is f32 internally but the result
         # round-trips through f16 for store and oracle — leave room.
         "rtol":         1e-3,
-        # math.exp lowers to spyreop.exp (LowerSpyreOps, #107); ktir_cpu --
-        # the numerical oracle -- has no MLIRTypeAdapter handler for it yet.
-        "xfail_numerical": "ktir_cpu has no spyreop.exp MLIRTypeAdapter handler yet (#107)",
         "extra_checks": lambda t: (
             # In-tile reduce + broadcast: max and sum each emit one
             # linalg.reduce; the row_max - row subtraction emits a
@@ -166,9 +163,6 @@ VARIANTS = {
             # BLOCK_N=[32,64]: absorbs multi_tile_small_block (BLOCK_N=32).
             "M": [1000, 1024], "N": [1024], "BLOCK_N": [32, 64],
         },
-        # math.exp lowers to spyreop.exp (LowerSpyreOps, #107); ktir_cpu --
-        # the numerical oracle -- has no MLIRTypeAdapter handler for it yet.
-        "xfail_numerical": "ktir_cpu has no spyreop.exp MLIRTypeAdapter handler yet (#107)",
         "extra_checks": lambda t: (
             # Three nested scf.for in the kernel body: outer rows-per-core,
             # three inner N-tile passes (max, denom, normalize).
@@ -210,20 +204,17 @@ VARIANTS = {
         "params":    {"M": [1024], "N": [1024], "BLOCK_M": [4], "BLOCK_N": [64]},
         # The multi-result parsing gap this variant used to be xfailed for
         # (regex KTIRParser collapsing `%denom:2 = scf.for ... -> (T, T)`) is
-        # fixed -- MLIRFrontendParser resolves %denom#0 / %denom#1 fine. It is
-        # xfailed again now for an unrelated reason: math.exp lowers to
-        # spyreop.exp (LowerSpyreOps, #107) and ktir_cpu has no
-        # MLIRTypeAdapter handler for that op yet.
-        "xfail_numerical": "ktir_cpu has no spyreop.exp MLIRTypeAdapter handler yet (#107)",
+        # fixed -- MLIRFrontendParser resolves %denom#0 / %denom#1 fine.
         "extra_checks": lambda t: (
             # Pass 1 carries row_max + denom as iter_args through the
             # N-loop; pass 2 is a plain N-loop. The fused pattern emits
             # arith.mulf alongside the exp / sum that also appear in the
-            # other variants. math.exp is scalarized then lowered to
-            # spyreop.exp by the default lower_spyre_ops fix (fp16 is a
-            # supported spyreop scalar type).
-            t.assert_present("spyreop.exp", "arith.mulf", "arith.addf"),
-            t.assert_absent("math.exp"),
+            # other variants. math.exp is scalarized (ConvertElementwiseToLinalg)
+            # but stays math.exp at this stage -- LowerSpyreOps only runs later,
+            # at the spyrecode stage (_SPYRECODE_STAGE_PASSES), so it is never
+            # applied to this ktir-stage module.
+            t.assert_present("math.exp", "arith.mulf", "arith.addf"),
+            t.assert_absent("spyreop.exp"),
         ),
     },
 }

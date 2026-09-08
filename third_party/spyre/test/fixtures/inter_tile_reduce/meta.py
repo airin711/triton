@@ -473,9 +473,6 @@ VARIANTS["softmax"] = {
     "inputs":      make_inputs_softmax,
     "output_key":  "output_ptr",
     "rtol":        1e-2,
-    # math.exp lowers to spyreop.exp (LowerSpyreOps, #107); ktir_cpu -- the
-    # numerical oracle -- has no MLIRTypeAdapter handler for it yet.
-    "xfail_numerical": "ktir_cpu has no spyreop.exp MLIRTypeAdapter handler yet (#107)",
     "extra_checks": _extra_checks_softmax,
 }
 

@@ -219,6 +219,25 @@ _SPYRECODE_STAGE_PASSES = (
     # reduction iterator, so the other producer of linalg.fill in this pipeline
     # (tt.splat) is out of scope.
     "drop_reduction_init_fill",
+
+    # LowerSpyreOps. Rewrites a scalar math/arith op (math.sqrt/exp/rsqrt,
+    # arith.divf, and arith.addi/muli inside a linalg.generic body) to the
+    # spyreop dialect spelling dbo-opt's scheduler expects.
+    #
+    # It fails both halves of the rule above. dbo-opt is the one that needs
+    # the spyreop spellings; a kernel that stops at KTIR has no use for them.
+    # And the cached .ktir artifact is meant to stay readable by tools built
+    # against plain math/arith -- ktir_cpu's numerical oracle among them,
+    # which has no MLIRTypeAdapter handler for spyreop.* ops yet (#107) --
+    # so a rewrite only dbo-opt can consume does not belong in that artifact.
+    #
+    # Ordering: after convert_elementwise_to_linalg / unalias_linalg_outs,
+    # which already ran as required_fixes during _make_ktir, so the scalar
+    # math/arith op it matches is already inside the linalg.generic body
+    # those produced. A scalar op on a type spyreop has no intrinsic for
+    # (f64, bf16, ...) is reported as illegal rather than left alone -- see
+    # LowerSpyreOps.cpp and Passes.td.
+    "lower_spyre_ops",
 )
 
 
@@ -489,18 +508,15 @@ class SpyreBackend(BaseBackend):
         #
         # convert_elementwise_to_linalg and unalias_linalg_outs are what the
         # scheduler inside dbo-opt requires of every kernel it will lower to a
-        # binary. lower_spyre_ops runs after them, in that dict order, so it sees
-        # convert_elementwise_to_linalg's scalarized linalg.generic body and can
-        # match a scalar math op inside it -- e.g. math.sqrt on a tensor becomes
-        # spyreop.sqrt once it is scalar. Its cost: a scalar math op on a type
-        # spyreop has no intrinsic for (f64, bf16, ...) used to pass through this
-        # pipeline untouched; now LowerSpyreOps reports it and the compile fails
-        # instead. Accepted for now -- softening that (leaving an unsupported
-        # scalar type alone instead of erroring) is separate follow-up work.
+        # binary. lower_spyre_ops is NOT here -- it also depends on
+        # convert_elementwise_to_linalg's scalarization, but it belongs to
+        # dbo-opt rather than to the IR every compile produces, and it can
+        # reject a scalar type spyreop has no intrinsic for (f64, bf16, ...),
+        # so it runs later, only for compiles that reach the spyrecode stage.
+        # See _SPYRECODE_STAGE_PASSES.
         parsed["required_fixes"] = {
             "convert_elementwise_to_linalg": "rewrite_descriptor_layout",
             "unalias_linalg_outs":           "rewrite_descriptor_layout",
-            "lower_spyre_ops":               "rewrite_descriptor_layout",
             **parsed.get("required_fixes", {}),
         }
         return SpyreOptions(**parsed)
