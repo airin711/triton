@@ -224,13 +224,6 @@ _SPYRECODE_STAGE_PASSES = (
     # arith.divf, and arith.addi/muli inside a linalg.generic body) to the
     # spyreop dialect spelling dbo-opt's scheduler expects.
     #
-    # It fails both halves of the rule above. dbo-opt is the one that needs
-    # the spyreop spellings; a kernel that stops at KTIR has no use for them.
-    # And the cached .ktir artifact is meant to stay readable by tools built
-    # against plain math/arith -- ktir_cpu's numerical oracle among them,
-    # which has no MLIRTypeAdapter handler for spyreop.* ops yet (#107) --
-    # so a rewrite only dbo-opt can consume does not belong in that artifact.
-    #
     # Ordering: after convert_elementwise_to_linalg / unalias_linalg_outs,
     # which already ran as required_fixes during _make_ktir, so the scalar
     # math/arith op it matches is already inside the linalg.generic body
@@ -505,15 +498,6 @@ class SpyreBackend(BaseBackend):
         # layout pass physicalizes the descriptor to its stick shape; the types then
         # disagree and the pipeline aborts.  rewrite_descriptor_layout runs after
         # that physicalization, so the fixes see consistent types.
-        #
-        # convert_elementwise_to_linalg and unalias_linalg_outs are what the
-        # scheduler inside dbo-opt requires of every kernel it will lower to a
-        # binary. lower_spyre_ops is NOT here -- it also depends on
-        # convert_elementwise_to_linalg's scalarization, but it belongs to
-        # dbo-opt rather than to the IR every compile produces, and it can
-        # reject a scalar type spyreop has no intrinsic for (f64, bf16, ...),
-        # so it runs later, only for compiles that reach the spyrecode stage.
-        # See _SPYRECODE_STAGE_PASSES.
         parsed["required_fixes"] = {
             "convert_elementwise_to_linalg": "rewrite_descriptor_layout",
             "unalias_linalg_outs":           "rewrite_descriptor_layout",
