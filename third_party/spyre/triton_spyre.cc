@@ -115,12 +115,6 @@ void init_triton_spyre_passes_ttir_to_ktdp(py::module &&m) {
   m.def("add_lower_compute_ops", [](mlir::PassManager &pm) {
     pm.addPass(mlir::triton::ktdp::createLowerComputeOpsPass());
   });
-  // Not in add_convert_ttir_to_ktdp above: spyreop's scalar intrinsics only
-  // accept scalar f16/df16/f32 operands, so this can only fire on a math op
-  // that is already scalar -- typically inside a linalg.generic body after
-  // convert_elementwise_to_linalg. Reachable individually for now; folding it
-  // into the default pipeline is a later ordering decision (anchor on
-  // convert_elementwise_to_linalg, same as unalias_linalg_outs).
   m.def("add_lower_spyre_ops", [](mlir::PassManager &pm) {
     pm.addPass(mlir::triton::ktdp::createLowerSpyreOpsPass());
   });
