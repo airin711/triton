@@ -359,21 +359,14 @@ VARIANTS = {
     # OP across add/mul, so it uses a factory like "default" rather than a
     # fixed "reference" like "realdiv".
     #
-    # KTIR-structural only for now, unlike its "default"/"realdiv" siblings:
-    # no `compiles_to_binary`, so `test_device_launch.py` does not pick this
-    # one up (see `compilable_example` in conftest.py, which parametrizes
-    # strictly over `compiles_to_binary` entries). Real hardware genuinely
-    # cannot compile it today -- dbo-opt's own verifier rejects the output
-    # descriptor's int32 store: `ktdf.data_transfer` requires its source and
-    # destination to share an element type, but the store side produces a
-    # *signed* `si32` memref for an int32 output tensor against a *signless*
-    # `i32` FIFO slot type. `LowerDescriptorMemory.cpp` already documents and
-    # reconciles this exact signedness split on the *load* path
-    # (`resolveIndexView`'s "two sides describe the same storage but
-    # disagree on signedness" comment) -- that reconciliation evidently
-    # doesn't extend to stores. Confirmed unrelated to `LowerSpyreOps.cpp`:
-    # the failure is inside dbo-opt itself, well after this pass runs.
-    # Revisit `compiles_to_binary` here once that store-side gap is fixed.
+    # `compiles_to_binary`, same as "default"/"realdiv" -- previously it
+    # wasn't: dbo-opt's `ktdf.data_transfer` verifier rejected the output
+    # descriptor's int32 store because the store's backing memref was
+    # signed `si32` while the stored tensor (and the FIFO slot it feeds)
+    # was signless `i32`. `LowerDescriptorMemory.cpp`'s `buildBaseMemoryView`
+    # now reads the descriptor's signless block type, matching the
+    # signless invariant Triton's own load/store verifiers already enforce
+    # on the tensor side, so the memref and the value agree.
     # -----------------------------------------------------------------------
     "addmul": {
         "base": None,
@@ -383,9 +376,7 @@ VARIANTS = {
         ],
         "summary": (
             "1D binary spyreop over a single tile, no distribution loop, "
-            "i32, stick-tiled. Sweeps OP across add/mul. KTIR-structural "
-            "only -- real hardware can't compile an int32 descriptor store "
-            "yet (see the comment above)."
+            "i32, stick-tiled. Sweeps OP across add/mul."
         ),
         "kernel_fn":    kernel.spyreop_addmul_1d_device,
         "factory":      SpyreIntOp(),
@@ -396,6 +387,7 @@ VARIANTS = {
             "LAYOUT": [_stick_1d("i32")],
             "OP": ["add", "mul"],
         },
+        "compiles_to_binary": True,
         "grid":         [1],
         "parallel":     False,
         "inputs":       make_addmul_inputs,
