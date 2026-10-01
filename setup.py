@@ -795,7 +795,7 @@ setup(
         # install-ktdp-mlir-bindings.sh with the correct MLIR_DIR baked in;
         # run it after this install (see also third_party/spyre/test/conftest.py).
         "spyre-test": [
-            "ktir-cpu @ git+https://github.com/torch-spyre/ktir-cpu@main",
+            "ktir-cpu @ git+https://github.com/torch-spyre/ktir-cpu@22dec4467c8cbed17954bbf48cce1b173d3d6ead",
             "pytest>=7,<9",
             "numpy>=1.24,<2",
             "lit>=18,<20",

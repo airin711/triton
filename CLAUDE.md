@@ -65,16 +65,19 @@ venv without activating it.
 - **LLVM**: `cmake/llvm-hash-spyre.txt`, fetched from
   `torch-spyre/ktir-mlir-frontend`'s artifact store by `setup_mlir.py`.
 - **ktir-cpu**: pinned in `setup.py` under `extras_require["spyre-test"]` to
-  `git+https://github.com/torch-spyre/ktir-cpu@main`. It is the numerical
-  interpreter for the test suite (treat as a dev dependency, not a stable
-  contract). Installed **without** its `[mlir-frontend]` extra on purpose —
-  that extra would pin `ktir-mlir-frontend` to ktir-cpu's own commit, which
-  differs from this repo's `third_party/spyre/ktir-mlir-frontend` submodule.
-  The numerical tests need `mlir_ktdp` (`MLIRFrontendParser`) built from *our*
-  submodule so it matches the lowering under test (see the parser note in
+  a specific commit SHA on `torch-spyre/ktir-cpu` (not `@main` — see below).
+  It is the numerical interpreter for the test suite (treat as a dev
+  dependency, not a stable contract). Installed **without** its
+  `[mlir-frontend]` extra on purpose — that extra would pin
+  `ktir-mlir-frontend` to ktir-cpu's own commit, which differs from this
+  repo's `third_party/spyre/ktir-mlir-frontend` submodule. The numerical
+  tests need `mlir_ktdp` (`MLIRFrontendParser`) built from *our* submodule
+  so it matches the lowering under test (see the parser note in
   `third_party/spyre/test/conftest.py`).
 
-To refresh ktir-cpu to the latest `main`:
+To bump the ktir-cpu pin to the latest `main`, replace the commit SHA in
+`setup.py`'s `spyre-test` extra with `git ls-remote
+https://github.com/torch-spyre/ktir-cpu main`'s output, then reinstall:
 
 ```bash
 uv pip install -e ".[spyre-test]" --force-reinstall --no-deps

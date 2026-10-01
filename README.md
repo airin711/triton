@@ -361,10 +361,10 @@ same posture upstream Triton has with a GPU.
 
 ## KTIR CPU Dependency
 
-The optional `spyre-test` extra installs `ktir-cpu` from
-`torch-spyre/ktir-cpu@main`. It provides the numerical interpreter used by the
-Spyre test suite. Treat it as a development dependency rather than part of a
-stable user-facing package contract.
+The optional `spyre-test` extra installs `ktir-cpu` from a pinned commit on
+`torch-spyre/ktir-cpu` (see `setup.py`). It provides the numerical interpreter
+used by the Spyre test suite. Treat it as a development dependency rather
+than part of a stable user-facing package contract.
 
 It is installed **without** its `[mlir-frontend]` extra on purpose: that extra
 would pin the `ktir-mlir-frontend` to `ktir-cpu`'s own commit, which differs

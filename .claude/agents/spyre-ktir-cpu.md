@@ -17,8 +17,9 @@ but is currently unwired (see the two parser helpers in
 `third_party/spyre/test/conftest.py`).
 
 In this repo `ktir_cpu` is a **pip dependency**, pinned in `setup.py` under
-`extras_require["spyre-test"]` to `git+https://github.com/torch-spyre/ktir-cpu@main`
-and installed by `uv pip install -e ".[spyre-test]"`. The Spyre test suite
+`extras_require["spyre-test"]` to a specific commit SHA on
+`git+https://github.com/torch-spyre/ktir-cpu` and installed by
+`uv pip install -e ".[spyre-test]"`. The Spyre test suite
 imports it (`from ktir_cpu import KTIRInterpreter`; the numerical mixin in
 `third_party/spyre/test/conftest.py` skips when it is not installed). It is not
 vendored in-tree — read its source from the installed package
