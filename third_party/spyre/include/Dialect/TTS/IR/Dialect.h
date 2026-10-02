@@ -9,6 +9,10 @@
 // the `tts.tensor_layout` *attribute*, which the lowered IR carries on the
 // memory view — and the one structural checker both are enforced by.
 //
+// And one placement marker, `tts.pin`, in the same two spellings: the op, which
+// a kernel authors on a value, and the `tts.pin` attribute, which the lowered IR
+// carries on the op producing that value.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef TRITON_SPYRE_DIALECT_TTS_IR_DIALECT_H
@@ -25,7 +29,10 @@
 #include <optional>
 
 // For the generated op classes: ODS emits Op<> subclasses that need the op
-// definition machinery, and TensorLayoutOp's operand is a Triton type.
+// definition machinery, and TensorLayoutOp's operand is a Triton type -- so both
+// have to be complete before Ops.h.inc below, not merely declared. PinOp's
+// memory_space is a builtin string, so nothing of ktdp's is needed here; the one
+// place that symbolizes the name includes KTDPAttrs.h itself.
 #include "mlir/Bytecode/BytecodeOpInterface.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/OpDefinition.h"

@@ -159,3 +159,54 @@ tt.func @two_descriptors(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>) {
 // CHECK: %[[OUTTILE:.*]] = ktdp.construct_access_tile %[[OUTVIEW]]
 // CHECK: ktdp.store %[[VAL]], %[[OUTTILE]]
 // CHECK: tt.return
+
+// -----
+// TWO markers on one descriptor, stating the SAME layout, which is accepted -- and
+// the collision refusal next door is what makes this worth a case.
+//
+// That refusal exists because `setAttr` resolves a genuine conflict by overwriting,
+// so the later marker would win and the earlier would be gone with nothing said.
+// Two markers that agree are not that: the write puts back the value already there.
+// Refusing them would have broken a shape nobody writes deliberately -- a helper that
+// builds a descriptor and annotates it, inlined twice with the same arguments. The
+// `ttir` stage's CSE merges the two `Pure` tt.make_tensor_descriptor ops into one and
+// keeps BOTH markers, since a `tts` marker has no traits for CSE to act on. So one
+// view is reached from two identical markers, and it was a silent no-op before the
+// refusal existed.
+//
+// Both markers go, and one attribute is left. Transforms/invalid.mlir holds the
+// other half: two markers that disagree.
+#id2 = affine_map<(d0, d1) -> (d0, d1)>
+#view2 = affine_set<(d0, d1) : (d0 >= 0, -d0 + 127 >= 0, d1 >= 0, -d1 + 255 >= 0)>
+#tile2 = affine_set<(d0, d1) : (d0 >= 0, -d0 + 127 >= 0, d1 >= 0, -d1 + 63 >= 0)>
+
+tt.func @two_identical_markers(%ptr: !tt.ptr<f16>) -> tensor<128x64xf16> {
+  %c0 = arith.constant 0 : index
+  %base = builtin.unrealized_conversion_cast %ptr : !tt.ptr<f16> to index
+  %view = ktdp.construct_memory_view %base, sizes: [128, 256], strides: [256, 1]
+      {coordinate_set = #view2, memory_space = #ktdp.memory_space<global>}
+      : memref<128x256xf16>
+  %desc = builtin.unrealized_conversion_cast %view
+      : memref<128x256xf16> to !tt.tensordesc<128x64xf16>
+  tts.tensor_layout %desc
+    {phys_src = array<i64: 1, 0, 1>,
+     phys_op = array<i64: 1, 0, 2>,
+     phys_arg = array<i64: 64, 0, 64>} : !tt.tensordesc<128x64xf16>
+  tts.tensor_layout %desc
+    {phys_src = array<i64: 1, 0, 1>,
+     phys_op = array<i64: 1, 0, 2>,
+     phys_arg = array<i64: 64, 0, 64>} : !tt.tensordesc<128x64xf16>
+  %t = ktdp.construct_access_tile %view[%c0, %c0]
+      {access_tile_order = #id2, access_tile_set = #tile2}
+      : memref<128x256xf16> -> !ktdp.access_tile<128x64xindex>
+  %d = ktdp.load %t : <128x64xindex> -> tensor<128x64xf16>
+  tt.return %d : tensor<128x64xf16>
+}
+
+// CHECK-LABEL: tt.func @two_identical_markers
+// CHECK: ktdp.construct_memory_view
+// CHECK-SAME: tts.tensor_layout = {phys_arg = array<i64: 64, 0, 64>, phys_op = array<i64: 1, 0, 2>, phys_src = array<i64: 1, 0, 1>}
+// CHECK-NOT: tts.tensor_layout %
+// CHECK-NOT: to !tt.tensordesc
+// CHECK: ktdp.construct_access_tile
+// CHECK: tt.return

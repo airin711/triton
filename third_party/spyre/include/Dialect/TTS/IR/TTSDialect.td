@@ -31,13 +31,19 @@ def TTS_Dialect : Dialect {
     `dbo-opt` loads ours. So the value of `tts.tensor_layout` is built out of
     builtin attributes only, and must stay that way.
 
-    The one op the dialect does define, `tts.tensor_layout`, is the *authoring*
-    form of that same layout and is bound by the same rule from the other side:
-    it is fully consumed before any artifact is written, by
-    `LowerDescriptorMemory`, which turns it into the attribute. An op does have
-    to be constructed, so one surviving into an artifact would fail at parse in
-    a consumer that does not load us — which is why the op and the attribute are
-    a before/after pair and never a choice of encoding for the same IR.
+    The two ops the dialect does define, `tts.tensor_layout` and `tts.pin`, are
+    the *authoring* forms of two such annotations, and are bound by the same rule
+    from the other side: both are fully consumed before any artifact is written,
+    by `LowerTTSMarkers`, which turns each into its attribute. An op does have to
+    be constructed, so one surviving into an artifact would fail at parse in a
+    consumer that does not load us — which is why each op and its attribute are a
+    before/after pair and never a choice of encoding for the same IR.
+
+    Where the attribute lands is the marker's own business and differs between
+    the two: a layout names a descriptor and lands on the memory view that
+    descriptor became, a pin names a value and lands on the op producing it.
+    What does not differ is that the value of either is built out of builtin
+    attributes only.
   }];
 
   let extraClassDeclaration = [{
@@ -66,6 +72,43 @@ def TTS_Dialect : Dialect {
     static constexpr ::llvm::StringLiteral kPhysSrcName = "phys_src";
     static constexpr ::llvm::StringLiteral kPhysOpName = "phys_op";
     static constexpr ::llvm::StringLiteral kPhysArgName = "phys_arg";
+
+    /// Where a pinned intermediate's buffer lives, as a `DictionaryAttr` on the
+    /// op PRODUCING the value, with the two entries `tts.pin` carried as an op:
+    ///
+    ///   memory_space : a `ktdp::MemorySpaceKind` name, today only "ct_local",
+    ///                  as a string for the consumer to symbolize
+    ///   offset       : an element index from the base of this kernel's scratchpad
+    ///                  allocation, as a single `i32` -- one offset, the same on
+    ///                  every core, since the scratchpad is per-core and nothing
+    ///                  wants a per-core spelling. Absent when the pin named no
+    ///                  offset, which the op's verifier refuses today.
+    ///
+    /// `memory_space` is a NAME and not `#ktdp.memory_space`, and that is the
+    /// dialect's builtin-value rule holding rather than an oversight -- see
+    /// TTSOps.td for the harder constraint underneath it, which is that the op
+    /// this dictionary is built from is created during tracing, where loading
+    /// ktdp would load `func` and break the `ttir` stage's Inliner.
+    ///
+    /// So the consumer symbolizes the name. There is no `ct_id` to carry: a pin
+    /// means the scratchpad of whichever core is running, never a named peer's, so
+    /// a consumer builds a `#ktdp.memory_space` with `ct_id` unspecified (-1),
+    /// which is what every site in this tree that constructs one passes --
+    /// LowerDescriptorMemory and LowerScalarLoad both do.
+    ///
+    /// The producing op is the carrier because a pin names a VALUE, and a value's
+    /// only op is the one defining it. So a value with no defining op has no
+    /// attribute form, and `LowerTTSMarkers` is where that is reported -- not the
+    /// op's verifier, which cannot tell a block argument the author named from one
+    /// a fold put there. See the note in `PinOp::verify`.
+    ///
+    /// Discardable, and builtin-valued like the layout above, so a consumer that
+    /// does not load this dialect still round-trips it.
+    static constexpr ::llvm::StringLiteral kPinAttrName = "tts.pin";
+
+    /// The two entry names of that dictionary.
+    static constexpr ::llvm::StringLiteral kMemorySpaceName = "memory_space";
+    static constexpr ::llvm::StringLiteral kOffsetName = "offset";
   }];
 
   let hasOperationAttrVerify = 1;

@@ -22,6 +22,14 @@ helpers: ``language/math.py``'s ``_check_dtype`` admits the extra dtypes a targe
 declares through the ``extra_math_dtypes`` codegen hook, alongside
 ``min_dot_size``. The table of which ops qualify lives in the backend, so these
 tests drive the hook rather than a backend predicate.
+
+The last section is the argument checking of one Spyre-only op, ``tl.spyre_pin``.
+It belongs with the guards rather than with the op's own tests because what it
+measures is which refusals the FRONTEND owns: a misspelled memory space and an
+offset of the wrong Python type are reported at the kernel line, while the
+offset's admissible *shape* is the op verifier's, over IR the frontend has
+already built. Driven through real tracing, since the backend guard resolves the
+target first and so a monkeypatched one never reaches the checks under test.
 """
 
 import pytest
@@ -295,3 +303,238 @@ class TestExtraMathDtypesInTracedIR:
         # not pass either.
         assert "math.exp %" in ttir
         assert "tensor<64x64xf16>" in ttir.split("math.exp %")[1].split("\n")[0]
+
+
+# ---------------------------------------------------------------------------
+# tl.spyre_pin — the refusals the frontend owns, and the op it builds
+# ---------------------------------------------------------------------------
+
+class TestSpyrePin:
+
+    SIGNATURE = {"x_ptr": "*fp16", "out_ptr": "*fp16",
+                 "M": "constexpr", "N": "constexpr"}
+    CONSTANTS = {"M": 64, "N": 64}
+
+    @staticmethod
+    def _trace(kernel):
+        from utils import compile_to_ttir
+        return compile_to_ttir(kernel, TestSpyrePin.SIGNATURE,
+                               TestSpyrePin.CONSTANTS)
+
+    @staticmethod
+    def _raises(kernel, match):
+        from triton.compiler.errors import CompilationError
+        with pytest.raises(CompilationError) as exc:
+            TestSpyrePin._trace(kernel)
+        assert match in str(exc.value)
+
+    def test_constant_offset_reaches_the_ir(self):
+        import triton
+        import triton.language as tl
+
+        @triton.jit
+        def k(x_ptr, out_ptr, M: tl.constexpr, N: tl.constexpr):
+            x_desc = tl.make_tensor_descriptor(
+                x_ptr, shape=[M, N], strides=[N, 1], block_shape=[M, N])
+            out_desc = tl.make_tensor_descriptor(
+                out_ptr, shape=[M, N], strides=[N, 1], block_shape=[M, N])
+            e = tl.exp(x_desc.load([0, 0]))
+            tl.spyre_pin(e, "ct_local", offset=4096)
+            out_desc.store([0, 0], e)
+
+        ttir = self._trace(k)
+        # Both are ATTRIBUTES on the op, so both are in its attr-dict and neither is
+        # IR: no arith.constant is built for the offset.
+        #
+        # The space is the NAME the kernel wrote, not #ktdp.memory_space, and this
+        # assertion is the one that would catch it changing. Building that attribute
+        # here would mean loading ktdp during tracing, which loads `func` and makes
+        # the ttir stage's Inliner abort the compile — so the name staying a string
+        # is what lets a pinned kernel compile at all.
+        assert "tts.pin" in ttir
+        assert 'memory_space = "ct_local"' in ttir
+        assert "offset = 4096 : i32" in ttir
+        assert "arith.constant 4096" not in ttir
+
+    def test_affine_offset_is_refused_with_the_reason(self):
+        import triton
+        import triton.language as tl
+
+        @triton.jit
+        def k(x_ptr, out_ptr, M: tl.constexpr, N: tl.constexpr):
+            pid = tl.program_id(0)
+            x_desc = tl.make_tensor_descriptor(
+                x_ptr, shape=[M, N], strides=[N, 1], block_shape=[M, N])
+            out_desc = tl.make_tensor_descriptor(
+                out_ptr, shape=[M, N], strides=[N, 1], block_shape=[M, N])
+            e = tl.exp(x_desc.load([0, 0]))
+            tl.spyre_pin(e, "ct_local", offset=4096 + pid * 256)
+            out_desc.store([0, 0], e)
+
+        # The form an author reaches for, and the one the message has to earn:
+        # `4096 + pid * 256` arrives as a traced tl.tensor, because program_id is
+        # a run-time read. So the diagnostic names program_id rather than only
+        # reporting a type, and points at trace time as the reason.
+        self._raises(k, "must be a plain int element offset")
+        self._raises(k, "tl.program_id")
+
+    def test_no_offset_is_refused_by_the_op(self, capfd):
+        import pytest as _pytest
+        import triton
+        import triton.language as tl
+
+        @triton.jit
+        def k(x_ptr, out_ptr, M: tl.constexpr, N: tl.constexpr):
+            x_desc = tl.make_tensor_descriptor(
+                x_ptr, shape=[M, N], strides=[N, 1], block_shape=[M, N])
+            out_desc = tl.make_tensor_descriptor(
+                out_ptr, shape=[M, N], strides=[N, 1], block_shape=[M, N])
+            e = tl.exp(x_desc.load([0, 0]))
+            tl.spyre_pin(e, "ct_local")
+            out_desc.store([0, 0], e)
+
+        # The surface admits it and the OP refuses it, so this is caught when the
+        # traced module is verified rather than at the kernel line. That asymmetry
+        # is deliberate: the field stays optional in ODS and in this signature so
+        # the refusal can lift without either changing shape, and it is refused
+        # today because nothing in the tree can place a buffer at an offset
+        # nobody chose. Refused here rather than restated in semantic.py, because
+        # unlike `global` there is no third spelling for an author to go hunting
+        # for -- the message names the one thing to do, which is state an offset.
+        #
+        # capfd rather than the exception: a verifier failure reaches Python as a
+        # bare RuntimeError("error encountered during parsing") and MLIR writes the
+        # diagnostic to the process's stderr, so the message is only readable at
+        # the file-descriptor level.
+        with _pytest.raises(RuntimeError):
+            self._trace(k)
+        assert "no offset, and nothing here can choose one" in capfd.readouterr().err
+
+    def test_unknown_memory_space_is_refused_at_the_kernel_line(self):
+        import triton
+        import triton.language as tl
+
+        @triton.jit
+        def k(x_ptr, out_ptr, M: tl.constexpr, N: tl.constexpr):
+            x_desc = tl.make_tensor_descriptor(
+                x_ptr, shape=[M, N], strides=[N, 1], block_shape=[M, N])
+            out_desc = tl.make_tensor_descriptor(
+                out_ptr, shape=[M, N], strides=[N, 1], block_shape=[M, N])
+            e = tl.exp(x_desc.load([0, 0]))
+            tl.spyre_pin(e, "lx", offset=4096)
+            out_desc.store([0, 0], e)
+
+        # Restated in the frontend so this is a traceback at the pin, rather than
+        # the op verifier's failure after the whole function has been traced.
+        self._raises(k, "memory_space must be 'ct_local'")
+
+    def test_global_is_refused_and_says_why(self):
+        import triton
+        import triton.language as tl
+
+        @triton.jit
+        def k(x_ptr, out_ptr, M: tl.constexpr, N: tl.constexpr):
+            x_desc = tl.make_tensor_descriptor(
+                x_ptr, shape=[M, N], strides=[N, 1], block_shape=[M, N])
+            out_desc = tl.make_tensor_descriptor(
+                out_ptr, shape=[M, N], strides=[N, 1], block_shape=[M, N])
+            e = tl.exp(x_desc.load([0, 0]))
+            tl.spyre_pin(e, "global")
+            out_desc.store([0, 0], e)
+
+        # `global` is a real ktdp memory space and the design's prose names it, so
+        # the message has to say a pin cannot place an HBM intermediate rather than
+        # imply the spelling is wrong — otherwise the author goes looking for a
+        # third name.
+        self._raises(k, "'global' cannot be pinned")
+        self._raises(k, "tl.make_tensor_descriptor")
+
+    def test_non_integer_offset_is_refused(self):
+        import triton
+        import triton.language as tl
+
+        @triton.jit
+        def k(x_ptr, out_ptr, M: tl.constexpr, N: tl.constexpr):
+            x_desc = tl.make_tensor_descriptor(
+                x_ptr, shape=[M, N], strides=[N, 1], block_shape=[M, N])
+            out_desc = tl.make_tensor_descriptor(
+                out_ptr, shape=[M, N], strides=[N, 1], block_shape=[M, N])
+            e = tl.exp(x_desc.load([0, 0]))
+            tl.spyre_pin(e, "ct_local", offset="4096")
+            out_desc.store([0, 0], e)
+
+        self._raises(k, "offset must be a plain int element offset")
+
+    def test_bool_offset_is_refused(self):
+        import triton
+        import triton.language as tl
+
+        @triton.jit
+        def k(x_ptr, out_ptr, M: tl.constexpr, N: tl.constexpr):
+            x_desc = tl.make_tensor_descriptor(
+                x_ptr, shape=[M, N], strides=[N, 1], block_shape=[M, N])
+            out_desc = tl.make_tensor_descriptor(
+                out_ptr, shape=[M, N], strides=[N, 1], block_shape=[M, N])
+            e = tl.exp(x_desc.load([0, 0]))
+            tl.spyre_pin(e, "ct_local", offset=True)
+            out_desc.store([0, 0], e)
+
+        # Excluded explicitly, because `bool` IS an `int` in Python: an isinstance
+        # check alone would accept this and pin at element 1, silently.
+        self._raises(k, "offset must be a plain int element offset")
+
+    def test_kernel_argument_is_refused_at_the_kernel_line(self):
+        import triton
+        import triton.language as tl
+
+        @triton.jit
+        def k(x_ptr, out_ptr, M: tl.constexpr, N: tl.constexpr):
+            x_desc = tl.make_tensor_descriptor(
+                x_ptr, shape=[M, N], strides=[N, 1], block_shape=[M, N])
+            out_desc = tl.make_tensor_descriptor(
+                out_ptr, shape=[M, N], strides=[N, 1], block_shape=[M, N])
+            e = tl.exp(x_desc.load([0, 0]))
+            tl.spyre_pin(x_ptr, "ct_local", offset=4096)
+            out_desc.store([0, 0], e)
+
+        # Refused HERE and not by tts.pin's verifier, which is the round-2 move. A
+        # pin's annotation rides on the op producing the value, so a value no op
+        # produces cannot carry one — but after tracing, a block argument the author
+        # named and one a fold left behind are indistinguishable IR, and the
+        # canonicalizer does produce the second (it RAUWs `x * 1` to `x`). A verifier
+        # rule of that shape would fail modules the author wrote correctly.
+        #
+        # `x_ptr` is the genuine entry-input shape: a pointer argument arrives as a
+        # tl.tensor whose handle IS a block argument of the traced tt.func's entry
+        # block. It already lives where its base pointer says, so pinning it asks to
+        # relocate a kernel argument, which is not what a pin does.
+        #
+        # The message names both kinds of block argument, because the handle carries no
+        # owner to tell them apart — and it does not need to, since the author is
+        # looking at the line that says which they wrote.
+        self._raises(k, "not one an op in the kernel produced")
+
+    def test_loop_carried_value_is_refused_and_points_at_the_result(self):
+        import triton
+        import triton.language as tl
+
+        @triton.jit
+        def k(x_ptr, out_ptr, M: tl.constexpr, N: tl.constexpr):
+            x_desc = tl.make_tensor_descriptor(
+                x_ptr, shape=[M, N], strides=[N, 1], block_shape=[M, N])
+            out_desc = tl.make_tensor_descriptor(
+                out_ptr, shape=[M, N], strides=[N, 1], block_shape=[M, N])
+            acc = x_desc.load([0, 0])
+            for _ in range(4):
+                # The iter_arg, which is an scf.for block argument during tracing.
+                tl.spyre_pin(acc, "ct_local", offset=4096)
+                acc = acc + x_desc.load([0, 0])
+            out_desc.store([0, 0], acc)
+
+        # The case worth having a message for. A loop-carried value is NOT global —
+        # it is a live intermediate and a reasonable thing to want pinned — and it is
+        # refused because nothing has decided whether that means one buffer reused
+        # every iteration or one per iteration. So the message names the workaround
+        # rather than only the refusal: pin the loop's RESULT, which an op produces.
+        self._raises(k, "not one an op in the kernel produced")
+        self._raises(k, "pin the loop's RESULT")

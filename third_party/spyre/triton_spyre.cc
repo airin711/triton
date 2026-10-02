@@ -15,6 +15,10 @@
 // The one dialect of ours a kernel is authored in, for the op builder below and
 // for the coordinate-map evaluator the descriptor-layout query reads.
 #include "Dialect/TTS/IR/Dialect.h"
+// ktdp's memory-space ENUM, for validating the name tl.spyre_pin was given. The
+// enum only; deliberately not KTDPDialect.h, because this file must not load that
+// dialect -- see the note on create_pin.
+#include "ktir/Dialect/KTDP/KTDPAttrs.h"
 // getDescriptorLogicalLayout, shared with LowerDescriptorMemory so the footprint
 // this file reports is computed from the extents that pass builds the view with.
 #include "Utils/Utility.h"
@@ -84,7 +88,8 @@ void init_triton_spyre_passes_ttir_to_ktdp(py::module &&m) {
 
 void init_triton_spyre_ir_builders(py::module &&m) {
   // Op builders for the `tts` dialect, called from the Triton frontend --
-  // tl.spyre_tensor_layout, through triton.language.semantic.
+  // tl.spyre_tensor_layout and tl.spyre_pin, through
+  // triton.language.semantic.
   //
   // The frontend reaches this as `from triton._C.libtriton import spyre`, lazily
   // -- an import at module scope in semantic.py would make every backend's
@@ -118,6 +123,48 @@ void init_triton_spyre_ir_builders(py::module &&m) {
               builder.getDenseI64ArrayAttr(physOp),
               builder.getDenseI64ArrayAttr(physArg));
         });
+
+  // tl.spyre_pin. The memory space is stored as the NAME the kernel wrote, and this
+  // builder is why: `#ktdp.memory_space` would have to be CONSTRUCTED, constructing
+  // an attribute requires its dialect loaded, and loading ktdp here would load
+  // `func` -- a dependent dialect of ktdp's -- which then promises a
+  // DialectInlinerInterface nothing in this tree registers, so the Inliner in the
+  // `ttir` stage aborts the compile. This runs during tracing, before that stage,
+  // so the one place the attribute would be built is the one place ktdp must not be
+  // loaded. `MaterializePinnedBuffers` symbolizes the name in `spyrecode` instead.
+  //
+  // The name is still validated here, which needs neither a context nor a loaded
+  // dialect: `symbolizeMemorySpaceKind` is a function on the enum. Whether a known
+  // kind may be PINNED is a different question and the op's verifier keeps it, with
+  // `semantic.py` restating the `global` case so that one is a traceback at the
+  // kernel line rather than a verifier failure after the whole function has traced.
+  //
+  // `offset` is an int rather than a Value: the op holds it as an attribute, so
+  // there is no IR to build for it and nothing to keep alive until the marker
+  // lowers. A missing one is a null attribute rather than a sentinel, which is how
+  // ODS spells an absent optional attribute and what keeps "the author stated no
+  // offset" distinguishable from "the author stated 0".
+  m.def(
+      "create_pin",
+      [](TritonOpBuilder &self, mlir::Value &value,
+         const std::string &memorySpace, std::optional<int32_t> offset)
+          -> void {
+        // LOAD, not register -- see create_tensor_layout above for why the
+        // frontend is the one place that has to ask. Only `tts`, per the note
+        // above.
+        self.getContext()->loadDialect<mlir::triton::tts::TTSDialect>();
+
+        if (!mlir::ktdp::symbolizeMemorySpaceKind(memorySpace))
+          throw std::invalid_argument("spyre_pin: memory space '" + memorySpace +
+                                      "' is not one ktdp defines");
+
+        auto &builder = self.getBuilder();
+        self.create<mlir::triton::tts::PinOp>(
+            value, builder.getStringAttr(memorySpace),
+            offset ? builder.getI32IntegerAttr(*offset) : mlir::IntegerAttr());
+      },
+      py::arg("builder"), py::arg("value"), py::arg("memory_space"),
+      py::arg("offset") = py::none());
 }
 
 /// One `tts.tensor_layout` marker, reduced to what a footprint is computed from.

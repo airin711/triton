@@ -2174,4 +2174,76 @@ class TritonSemantic(Generic[TensorTy]):
         spyre.ir_builders.create_tensor_layout(self.builder, desc.handle, src,
                                                op, arg)
         return tl.tensor(None, tl.void)
+
+    def spyre_pin(self, v, memory_space, offset):
+        """Emit tts.pin -- names the memory space a value's buffer lives in, and
+        for the scratchpad the element offset it starts at."""
+        target = driver.active.get_current_target()
+        if target.backend != "spyre":
+            raise ValueError(
+                "tl.spyre_pin is only supported on the 'spyre' "
+                f"backend, not '{target.backend}'")
+
+        # A pin's annotation rides on the op PRODUCING the value, so a value no op
+        # produces cannot be pinned. This is the only place the question can be
+        # asked of what the AUTHOR wrote: after tracing, a block argument the kernel
+        # named and one a fold left behind are the same IR, which is why `tts.pin`'s
+        # verifier does not ask it (a canonicalizer folding `x * 1` would otherwise
+        # invalidate a module the author wrote correctly).
+        #
+        # Both kinds are named rather than one being guessed at. The handle carries
+        # no owner, so which of the two this is cannot be read off it -- and it does
+        # not need to be, because this raises at the kernel line, where the author is
+        # looking at the code that says which they wrote.
+        if isinstance(v.handle, ir.block_argument):
+            raise ValueError(
+                "spyre_pin: this value is not one an op in the kernel produced, so "
+                "there is nothing for the annotation to ride on. A KERNEL ARGUMENT "
+                "already lives where its base pointer says, so pinning one asks to "
+                "relocate it, which a pin does not do. A LOOP-CARRIED value is a "
+                "live intermediate and a reasonable thing to want pinned, but "
+                "nothing has decided whether that means one buffer reused each "
+                "iteration or one per iteration; pin the loop's RESULT instead, "
+                "which an op does produce.")
+
+        # Restated here so a misspelling is reported at the kernel line rather than
+        # as an MLIR verifier failure after tracing. `tts.pin`'s verifier is what
+        # enforces it -- the same split as _parse_coord_entry above, and for the
+        # same reason.
+        #
+        # `global` gets its own message because it is a plausible thing to write:
+        # ktdp has the kind and the design's prose names it, but a pin cannot place
+        # an HBM intermediate. Telling the author the spelling is wrong would send
+        # them looking for a third name.
+        space = tl._unwrap_if_constexpr(memory_space)
+        if space == "global":
+            raise ValueError(
+                "spyre_pin: memory_space 'global' cannot be pinned -- an "
+                "intermediate in HBM is written as a tl.make_tensor_descriptor "
+                "with an explicit store and load. Only 'ct_local' is admitted.")
+        if space != "ct_local":
+            raise ValueError(
+                f"spyre_pin: memory_space must be 'ct_local', got {space!r}")
+
+        # A plain int, and nothing else. The offset is an ATTRIBUTE on tts.pin, so
+        # it has to be known here -- there is no IR for it to be computed in. A
+        # traced value is therefore refused with the reason rather than with a type
+        # name: tl.program_id(0) is the one an author reaches for, and it is a
+        # run-time read that DistributeWork folds against the grid long after
+        # tracing, so no amount of unwrapping turns it into a number.
+        #
+        # bool is an int in Python and is excluded, since `offset=True` is a
+        # mistake that would otherwise silently pin at element 1.
+        off = tl._unwrap_if_constexpr(offset)
+        if off is not None and (isinstance(off, bool)
+                                or not isinstance(off, int)):
+            raise ValueError(
+                "spyre_pin: offset must be a plain int element offset, got "
+                f"{off!r}. It is an attribute on tts.pin, so it must be known "
+                "at trace time -- a value computed in the kernel, tl.program_id "
+                "among them, cannot be one.")
+
+        from triton._C.libtriton import spyre
+        spyre.ir_builders.create_pin(self.builder, v.handle, space, off)
+        return tl.tensor(None, tl.void)
     # --- END --- added for spyre

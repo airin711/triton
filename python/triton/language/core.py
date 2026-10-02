@@ -3876,4 +3876,66 @@ def spyre_tensor_layout(desc, layout, _semantic=None):
     Only valid on the ``spyre`` backend — raises on any other target.
     """
     return _semantic.spyre_tensor_layout(desc, layout)
+
+
+@builtin
+def spyre_pin(v, memory_space, offset=None, _semantic=None):
+    """(Spyre only) Place a named value's buffer in a chosen memory space.
+
+    The scheduler admits one compute per local schedule, so a value handed from
+    one compute to the next has to go through memory. This says *which* memory,
+    and for the scratchpad, where in it. It lowers to a ``tts.pin`` marker, which
+    ``LowerTTSMarkers`` turns into an attribute on the op producing the value.
+
+    That attribute is where it stops TODAY: the request reaches the ``ktir``
+    artifact and nothing in the backend yet builds the buffer it asks for. A pin is
+    therefore a no-op on the generated code until the pass that honours it lands,
+    which is the follow-up to this one.
+
+    Once honoured, pinning also SPLITS the producer from its consumers, since the
+    value then reaches them through memory — which is what makes a pin the way to
+    stop two pointwise ops fusing into one compute.
+
+    Args:
+        v:            The value to place, and it must be one an OP IN THE KERNEL
+                      PRODUCED, since that op is what carries the annotation:
+                      ``y = tl.exp(x)`` can be pinned, ``tl.exp(x)`` inside a larger
+                      expression cannot. Neither can a kernel argument (it lives
+                      where its base pointer says) nor a value carried by a loop
+                      (pin the loop's result instead) — both are refused at the
+                      kernel line.
+        memory_space: ``"ct_local"``, the per-core scratchpad, and nothing else.
+                      ``"global"`` is refused: an intermediate in HBM is written as
+                      a ``tl.make_tensor_descriptor`` with an explicit store and
+                      load, and nothing places an anonymous device buffer. The
+                      parameter exists so the surface does not change shape if that
+                      ever becomes possible.
+        offset:       Where in the scratchpad, as an ELEMENT OFFSET and not a byte
+                      address, counted from the base of whatever allocation the
+                      scratchpad allocator gives this kernel — NOT from the start of
+                      the scratchpad. So alignment is not yours to get right: the
+                      allocator aligns the base it hands out. What is yours is that
+                      two pins in one kernel share that base, and so must not
+                      overlap each other.
+
+                      REQUIRED today although the parameter is optional: nothing in
+                      the backend can place a buffer at an offset nobody chose. It
+                      stays optional here so that refusal can lift without this
+                      signature changing. A plain int, known at trace time::
+
+                          tl.spyre_pin(v, "ct_local", offset=0x100)
+                          tl.spyre_pin(v, "ct_local", offset=BASE)  # constexpr
+
+                      One offset, used by every core — the scratchpad is per-core, so
+                      a pin places this value in the scratchpad of whichever core is
+                      running. A value computed in the kernel cannot be an offset: it
+                      is an attribute on ``tts.pin``, which is what keeps the region a
+                      pin occupies known at compile time and so keeps its capacity and
+                      its disjointness from other pins checkable. ``tl.program_id(0)``
+                      in particular is a run-time read, folded against the grid long
+                      after tracing.
+
+    Only valid on the ``spyre`` backend — raises on any other target.
+    """
+    return _semantic.spyre_pin(v, memory_space, offset)
 # --- END --- added for spyre
