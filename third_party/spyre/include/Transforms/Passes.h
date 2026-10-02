@@ -24,8 +24,9 @@ namespace mlir::triton::spyre {
 
 std::unique_ptr<OperationPass<ModuleOp>> createUnaliasLinalgOutsPass();
 std::unique_ptr<OperationPass<ModuleOp>> createNormalizeForDevicePass();
+std::unique_ptr<OperationPass<ModuleOp>> createLowerSpyreOpsPass();
 std::unique_ptr<OperationPass<ModuleOp>> createDropReductionInitFillPass();
-std::unique_ptr<OperationPass<ModuleOp>> createFoldDataMovementGenericsPass();
+std::unique_ptr<OperationPass<ModuleOp>> createFuseComputeAndDataMovementPass();
 std::unique_ptr<OperationPass<ModuleOp>> createMaterializeBaseAddressesPass(
     llvm::ArrayRef<int64_t> baseAddresses = {});
 

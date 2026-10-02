@@ -24,7 +24,6 @@ namespace mlir::triton::spyre {
 std::unique_ptr<OperationPass<ModuleOp>> createLowerDescriptorMemoryPass();
 std::unique_ptr<OperationPass<ModuleOp>> createLowerScalarLoadPass();
 std::unique_ptr<OperationPass<ModuleOp>> createLowerComputeOpsPass();
-std::unique_ptr<OperationPass<ModuleOp>> createLowerSpyreOpsPass();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertFunctionsPass();
 std::unique_ptr<OperationPass<ModuleOp>> createLowerInterTilePass();
 std::unique_ptr<OperationPass<ModuleOp>> createDistributeWorkPass(

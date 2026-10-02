@@ -521,10 +521,10 @@ def softmax_on_stick(
     Python ``1.0`` is an fp32 scalar.
 
     THE NUMERATOR BEING EXACTLY ONE IS LOAD-BEARING and must stay that way:
-    ``LowerSpyreOps`` matches a numerator of one and emits the UNARY
-    ``spyreop.reciprocal``, so no float immediate reaches the device. Rewriting
-    this group in any way that keeps the constant alive changes the answer -- see
-    the variant's banner in ``meta.py``.
+    ``LowerSpyreOps`` matches the constant and the divide as one group and emits
+    the UNARY ``spyreop.reciprocal``, so no float immediate reaches the device.
+    Rewriting this group in any way that keeps the constant alive changes the
+    answer -- see the variant's banner in ``meta.py``.
     """
     x_desc = tl.make_tensor_descriptor(
         x_ptr, shape=[M, N], strides=[N, 1], block_shape=[M, N],

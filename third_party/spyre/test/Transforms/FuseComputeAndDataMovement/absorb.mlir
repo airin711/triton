@@ -1,4 +1,4 @@
-// RUN: spyre-triton-opt %s --fold-data-movement-generics -split-input-file | FileCheck %s
+// RUN: spyre-triton-opt %s --fuse-compute-and-data-movement -split-input-file | FileCheck %s
 
 // ABSORPTION: a tensor shape op in front of a generic, rewritten into that
 // generic's operand map. Collapse and expand, the positives and the declines, all

@@ -26,7 +26,7 @@ def RewriteDescriptorLayoutGeneric
                 "for kernels whose compute ops are linalg.generic.";
   let description = [{
     Input: lowered KTDP IR (after LowerDescriptorMemory + LowerComputeOps +
-    FoldDataMovementGenerics).  Each annotated descriptor has been lowered to:
+    FuseComputeAndDataMovement).  Each annotated descriptor has been lowered to:
       ktdp.construct_memory_view (logical shape / strides, wrapped in an
       UnrealizedConversionCast bridging back to !tt.tensordesc so the marker's
       desc operand stays valid) →

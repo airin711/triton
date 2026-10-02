@@ -6,7 +6,7 @@ include "mlir/Pass/PassBase.td"
 // ============================================================================
 // Transforms whose subject is upstream structure or the whole program rather
 // than any one dialect's abstractions.  UnaliasLinalgOuts,
-// DropReductionInitFill and FoldDataMovementGenerics act on linalg form --
+// DropReductionInitFill and FuseComputeAndDataMovement act on linalg form --
 // generic bodies, indexing maps, reshape reassociations; NormalizeForDevice on
 // upstream ops the toolchain downstream of this tree will not take, wherever
 // they appear; MaterializeBaseAddresses acts on the entry function's signature.
@@ -21,8 +21,8 @@ include "mlir/Pass/PassBase.td"
 //
 // All five are members of a fixed stage pipeline in lib/Pipeline.cpp, not
 // opt-in, and all five run in `spyrecode`: NormalizeForDevice at that stage's
-// head, DropReductionInitFill, UnaliasLinalgOuts and FoldDataMovementGenerics in
-// its shaping prefix, MaterializeBaseAddresses at its tail and only when
+// head, DropReductionInitFill, UnaliasLinalgOuts and
+// FuseComputeAndDataMovement in its shaping prefix, MaterializeBaseAddresses at its tail and only when
 // `bindBaseAddresses` is set.
 // A pass's position there is chosen in C++ from a typed factory, so there is no
 // caller hook for inserting one at a named point.
@@ -100,12 +100,15 @@ def NormalizeForDevice : Pass<"normalize-for-device", "mlir::ModuleOp"> {
         junk drawer without a rule, so: a pattern belongs here only if all
         three hold.
 
-        1. It rewrites WITHIN upstream dialects — source and target both
-           upstream ops. Crossing a dialect boundary is a conversion and
-           belongs in Conversion/, not here — which is why the reciprocal
-           peephole, arith.divf → spyreop.reciprocal, sits in LowerSpyreOps.
-           Rule 1 draws the line by what a rewrite touches, not by what
-           motivates it.
+        1. It rewrites ONE op into ONE op, both of them upstream. Those two
+           together are the line, and each half excludes a neighbour in this
+           same file: a rewrite whose target is a spyreop intrinsic belongs in
+           [LowerSpyreOps], whether it takes one op or a group, and a rewrite
+           that changes which generic an op sits in belongs in
+           [FuseComputeAndDataMovement]. The reciprocal is the worked example:
+           its motive is a device behaviour exactly like the patterns here, but
+           its target is `spyreop.reciprocal`, so it is a selection rule and not
+           a normalization.
         2. The input is VALID IR that some downstream consumer refuses or
            mis-lowers, not a defect being fixed. A defect is a bug in whatever
            produced it, and patching it here hides that.
@@ -132,6 +135,156 @@ def NormalizeForDevice : Pass<"normalize-for-device", "mlir::ModuleOp"> {
 
     let dependentDialects = [
         "mlir::arith::ArithDialect"
+    ];
+}
+
+def LowerSpyreOps : Pass<"lower-spyre-ops", "mlir::ModuleOp"> {
+    let summary = "Select spyreop intrinsics for the arith/math ops in a compute "
+                  "body.";
+    let description = [{
+        Input: KTIR whose computes are linalg.generic — so after
+        ConvertElementwiseToLinalg and LinalgGeneralizeNamedOps, and after
+        [FuseComputeAndDataMovement], on which see the contract below. Bodies hold
+        arith/math ops. KTIR in, KTIR out: nothing here reads a `tt` op, which
+        is why the pass is here and not in Conversion/TritonToKTIR/, whose
+        criterion is a `tt` source dialect.
+
+        A RULE HOST. Adding a case is one pattern plus one line in the pass — no
+        change here, no CMake change, no pipeline change.
+
+        Rules, one op to one:
+        - math.sqrt  (f16 or f32)                 → spyreop.sqrt
+        - math.exp   (f16 or f32)                 → spyreop.exp
+        - math.rsqrt (f16 or f32)                 → spyreop.rsqrt
+        - arith.divf (f16 or f32), numerator 1.0  → spyreop.reciprocal
+        - arith.divf (f16 or f32), otherwise      → spyreop.realdiv
+        - arith.addi (i32, inside linalg.generic) → spyreop.addi32toi32
+        - arith.addi (i64, inside linalg.generic) → spyreop.addi64toi64
+        - arith.muli (i32, inside linalg.generic) → spyreop.muli32toi32
+
+        Rules, a GROUP to one:
+        - arith.cmpf + arith.uitofp     → spyreop.compare, carrying the predicate
+        - arith.cmpf + arith.select     → spyreop.select, fed by a spyreop.compare
+                                          unless the cmpf is a zero test the
+                                          select performs itself
+
+        NO NaN REACHES A COMPUTE BODY. Every rule assumes it. Under it, each
+        unordered cmpf predicate computes what its ordered counterpart does
+        (`une` as `one`, `ueq` as `oeq`, ...), so both spellings select the same
+        spyreop.compare — which is what lets Triton's `!=`, emitted as `une`,
+        lower at all. A NaN in a kernel's inputs gives an unspecified result on
+        the NaN lanes.
+
+        ONE PASS FOR ALL SELECTION, and the two kinds are not two tiers. They
+        share one greedy pattern set, and no two rules are rooted on the same
+        op, so no order is declared anywhere.
+
+        A GROUP IS WHAT IS SELECTABLE when no member of it could have been
+        selected alone — the criterion, and not the op count. `arith.cmpf`
+        produces an `i1`, a type no spyreop op produces, so what consumes that
+        `i1` is what says which device op the pair is: a `uitofp` makes it one
+        `spyreop.compare`, an `arith.select` would make it a compare feeding a
+        `spyreop.select`, two ops and still one indivisible choice.
+
+        EVERYTHING UNMATCHED FLOWS THROUGH, WITH ONE EXCEPTION. There is no
+        conversion target: an op with no device form reaches the backend, which is
+        the component that knows what it can take, and it refuses there. So this
+        pass has no notion of an unsupported input — it selects what it can and
+        leaves the rest as it found it. That is a change from when it was a
+        dialect conversion, where an unsupported float width was reported here.
+
+        The exception is an `i1`, and it is a different kind of thing rather than
+        a carve-out. Flows-through is about a CAPABILITY gap: an f64 math.sqrt is
+        valid IR that a future device or a future rule may do. An `i1` in a
+        compute body is UNREPRESENTABLE — no spyreop intrinsic produces or
+        consumes that type, so no rule anyone could add would ever remove it. That
+        is a property of the dialect, not of a device generation, and it makes the
+        program unlowerable rather than unsupported. It is reported HERE because
+        this is the only place that still knows the PREDICATE; by the time the
+        backend sees it, the failure names an op several lowerings below the one
+        the author wrote.
+
+        WHAT THE i1 CHECK REFUSES, precisely, because the scope is narrower than
+        "any i1 in a body". It reads op RESULTS only and skips one that is
+        yielded, so what it refuses is an i1 this pass produced and KEPT: made
+        inside one body and read inside the same body. That is exactly a group it
+        had the chance to select and did not.
+
+        An i1 crossing a generic BOUNDARY is the other pass's finding. It is the
+        tensor form, [FuseComputeAndDataMovement] has the clause that removes it,
+        and before that pass has run every compare sits in a generic of its own
+        yielding precisely that — so refusing it here would report IR a
+        predecessor was meant to reshape, while naming the wrong cause. The two
+        shapes are indistinguishable at this point, which is why the line is drawn
+        by where the value lives rather than by how it got there.
+
+        THE GENERIC BODY IS THE SCOPE for a group rule, and not a predicate.
+        Every compute reaches this pass as a linalg.generic, so "inside a body"
+        is not a guess about whether an op is compute — it is where the compute
+        is. An `arith.addi` on an element type in a body is compute, and the addi
+        of a loop index or a tile address is not in a body at all.
+
+        The integer 1:1 rules use the same test as a per-op PREDICATE, which is a
+        PROXY and is known to be one: plain scalar integer add and mul are also
+        loop indices, offsets and tile addressing, and no exact test separates
+        those from scalarized integer compute. It over-claims —
+        `tl.arange(0, N) * stride` is an arith.muli that will be inside a body
+        once scalarized — and holds today only because the tensor-of-pointers
+        tt.load path is unimplemented.
+
+        WHAT THIS PASS RELIES ON [FuseComputeAndDataMovement] FOR. A rule
+        matches ops in ONE body, and ConvertElementwiseToLinalg gives every tensor-level op a
+        body of its own — so a group spanning two tensor ops arrives spread over
+        two generics unless something fused them. That pass's `i1` clause exists
+        for exactly this: the compare rule sees its pair only because that pass
+        brought them together, and the reciprocal's constant is a scalar in the
+        body for the same reason. A contract between adjacent passes rather than
+        an accident — and the reciprocal reads its numerator THROUGH the body, so
+        for that rule the dependency is about whether it FIRES, never about
+        whether it is correct.
+
+        WHAT IS NOT SELECTED, and what each costs. None is a diagnostic, per
+        EVERYTHING UNMATCHED FLOWS THROUGH above.
+
+        A 1:1 rule does not fire and the op goes to the backend as arith:
+        - a float width with no intrinsic (f64, bf16)
+        - an integer width with no intrinsic, or integer add/mul outside a body
+        - anything still tensor-typed, which only ConvertElementwiseToLinalg not
+          having run can produce
+
+        A group rule declines and its members stay as they were:
+        - a divide whose numerator is not a constant one, or whose constant is
+          the denominator: the realdiv rule takes it, which is the right answer
+        - a numerator resolving to a NON-SPLAT constant tensor. Reading an
+          operand through the body is sound only for a value uniform across it,
+          so a mixed constant matches nothing — without that, element 0 being 1.0
+          would be taken for the whole tensor
+        - `ord` and `uno`, which ask about NaN-ness rather than an ordering, and
+          the constant predicates, which ask nothing. No counterpart exists.
+        - arith.sitofp where uitofp was wanted: an `i1` read as signed is 0 or
+          -1, so the cast gives -1.0 where the predicate holds
+        - a compare at one width whose result is cast to another.
+          spyreop.compare has SameOperandsAndResultType and cannot do both
+
+        Each of the compare declines leaves an `i1` INSIDE a body, so each is
+        REFUSED by the check above rather than passed through — they are the
+        exception, not the rule. The diagnostic names the predicate and says
+        which kind of decline it was: one with no counterpart at all, or one whose
+        predicate was fine and whose READER was the problem. That distinction is
+        what an author can act on.
+
+        Ordering: after the passes that make every compute a linalg.generic, and
+        after [FuseComputeAndDataMovement] per the contract above.
+
+        Output: the selected ops replaced by their intrinsics. Everything else
+        unchanged.
+    }];
+
+    let dependentDialects = [
+        "mlir::spyreop::SpyreOpDialect",
+        "mlir::math::MathDialect",
+        "mlir::arith::ArithDialect",
+        "mlir::linalg::LinalgDialect"
     ];
 }
 
@@ -202,8 +355,8 @@ def DropReductionInitFill : Pass<"drop-reduction-init-fill", "mlir::ModuleOp"> {
 }
 
 
-def FoldDataMovementGenerics
-    : Pass<"fold-data-movement-generics", "mlir::ModuleOp"> {
+def FuseComputeAndDataMovement
+    : Pass<"fuse-compute-and-data-movement", "mlir::ModuleOp"> {
     let summary = "Fold a pure data-movement linalg.generic into the indexing "
                   "map of the op that consumes it.";
     let description = [{
@@ -343,7 +496,7 @@ def FoldDataMovementGenerics
         earlier and says which property of the op is the problem.
 
         The store side is REJECTION ONLY, never absorption; the header of
-        FoldDataMovementGenerics.cpp says why, and what the eventual fix would
+        FuseComputeAndDataMovement.cpp says why, and what the eventual fix would
         have to choose between.
 
         Rejection is DERIVED, not a declared op list: the condition is exactly
@@ -351,7 +504,7 @@ def FoldDataMovementGenerics
         of the same function the absorber asks. Teaching that function a static
         `tensor.reshape` stops the rejection for it with nothing else to update.
 
-        `--debug-only=fold-data-movement-generics` traces the decisions: each
+        `--debug-only=fuse-compute-and-data-movement` traces the decisions: each
         restatement asked for and the answer, each operand the absorber considered
         with the composition spelled out, the gate's seeds and scope, and each
         rejection with the path that reached it.

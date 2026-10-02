@@ -1,4 +1,4 @@
-// RUN: spyre-triton-opt %s --convert-elementwise-to-linalg --linalg-generalize-named-ops --unalias-linalg-outs --fold-data-movement-generics 2>&1 | FileCheck %s
+// RUN: spyre-triton-opt %s --convert-elementwise-to-linalg --linalg-generalize-named-ops --unalias-linalg-outs --fuse-compute-and-data-movement 2>&1 | FileCheck %s
 
 // REAL IR, not a hand-written shape: the `ktir`-stage output of the
 // `softmax_2pass` fixture verbatim, locations stripped. Its own file because it is

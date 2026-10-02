@@ -191,7 +191,7 @@ void mlir::triton::spyre::buildSpyrecodePipeline(
   // behaviour it changes -- left in place, a data-movement generic has no layout
   // marker, so that pass leaves its result logical and bridges the gap with a
   // linearizing operand map the scheduler cannot project loop IVs through.
-  pm.addPass(createFoldDataMovementGenericsPass());
+  pm.addPass(createFuseComputeAndDataMovementPass());
 
   // Logical descriptors -> physical (stick-tiled) layout, rooted on the
   // `tts.tensor_layout` attribute LowerTTSMarkers wrote onto each annotated
@@ -219,10 +219,24 @@ void mlir::triton::spyre::buildSpyrecodePipeline(
   // dbo-opt's compute-group extraction aborts. See issue #161.
   pm.addPass(mlir::createCanonicalizerPass());
 
-  // Scalar math/arith (math.sqrt/exp/rsqrt, arith.divf, arith.addi/muli inside
-  // a linalg.generic body) -> the spyreop spelling the scheduler expects. After
-  // ConvertElementwiseToLinalg above -- which is now in this stage rather than the
-  // previous one -- so the op it matches is already inside a linalg.generic body.
+  // Instruction selection: the arith and math ops in each compute body become the
+  // spyreop intrinsics that do the same thing. One pass for all of it -- the
+  // one-op-to-one rules and the group rules share a pattern set, each rooted on
+  // a different op.
+  //
+  // Needs every compute to be a linalg.generic, which the passes above make it: a
+  // group rule's SCOPE is the generic body, and the 1:1 rules leave a tensor-typed
+  // op alone.
+  //
+  // And it needs FuseComputeAndDataMovement to have run, which it has, well above. A rule
+  // matches ops in ONE body while ConvertElementwiseToLinalg gives every
+  // tensor-level op a body of its own, so a group spanning two tensor ops is two
+  // generics until something fuses them -- that pass's `i1` clause is what does,
+  // and the compare rule fires only because of it. The reciprocal is the softer
+  // case: it reads its numerator through the body, so it fires either way.
+  //
+  // Nothing is reported here. An op with no device form flows through to dbo-opt,
+  // which is the component that knows what it can take.
   pm.addPass(createLowerSpyreOpsPass());
 
   if (options.bindBaseAddresses) {

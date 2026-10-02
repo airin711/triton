@@ -16,7 +16,6 @@ add_triton_library(TritonToKTIR
   LowerDescriptorMemory.cpp
   LowerScalarLoad.cpp
   LowerComputeOps.cpp
-  LowerSpyreOps.cpp
   ConvertFunctions.cpp
   LowerInterTile.cpp
   DistributeWork.cpp
@@ -40,7 +39,6 @@ add_triton_library(TritonToKTIR
   # Neither reads it and neither writes the attribute.
   TTSIR
   KTIR::KtdpDialect
-  KTIR::SpyreOpDialect
   TritonIR
   MLIRIR
   MLIRPass

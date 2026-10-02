@@ -1,4 +1,4 @@
-// RUN: spyre-triton-opt %s --fold-data-movement-generics -split-input-file | FileCheck %s
+// RUN: spyre-triton-opt %s --fuse-compute-and-data-movement -split-input-file | FileCheck %s
 
 // THE FUSION POLICY: which producer may be folded into its consumer's operand
 // map, and which may not. Separate from absorb.mlir because the subject is the

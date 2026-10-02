@@ -275,3 +275,27 @@ tt.func @muli_i32_outside_generic_survives(%a: i32, %b: i32) -> i32 {
   tt.return %0 : i32
 }
 }
+
+// -----
+
+// arith.divf with a constant 1.0 numerator, outside any generic body ->
+// spyreop.reciprocal; the constant is dead.
+//
+// Last in the file rather than beside @divf_f32 on purpose: the generated checks
+// capture each module's affine_map definitions at the END of the preceding
+// module's block, so a case inserted between two of them breaks a capture chain it
+// has nothing to do with.
+module {
+// CHECK-LABEL:   tt.func @divf_one_over_x_f32(
+// CHECK-SAME:  %[[VAL_0:.*]]: f32) -> f32 {
+// CHECK-NOT:       arith.constant
+// CHECK-NOT:       spyreop.realdiv
+// CHECK:           %[[VAL_1:.*]] = spyreop.reciprocal %[[VAL_0]] : f32
+// CHECK:           tt.return %[[VAL_1]] : f32
+// CHECK:         }
+tt.func @divf_one_over_x_f32(%x: f32) -> f32 {
+  %one = arith.constant 1.0 : f32
+  %0 = arith.divf %one, %x : f32
+  tt.return %0 : f32
+}
+}

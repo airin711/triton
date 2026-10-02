@@ -8,10 +8,13 @@
 // WHAT MAY BE ADDED HERE, so the pass does not become a junk drawer. A pattern
 // belongs here only if all three hold:
 //
-//   1. Source and target are both upstream ops (arith, linalg, tensor, scf,
-//      ...). Crossing a dialect boundary is a conversion and belongs in
-//      Conversion/ -- which is why the reciprocal peephole, arith.divf ->
-//      spyreop.reciprocal, sits in LowerSpyreOps and not here.
+//   1. ONE op into ONE op, both of them upstream. Both halves matter, and each
+//      excludes a neighbour: a rewrite whose target is a spyreop intrinsic
+//      belongs in LowerSpyreOps, whether it takes one op or a group, and one that
+//      changes which generic an op sits in belongs in FuseComputeAndDataMovement. The
+//      reciprocal is the worked example -- its motive is a device behaviour
+//      exactly like the patterns here, but its target is spyreop.reciprocal, so
+//      it is a selection rule.
 //   2. The input is valid IR that a downstream consumer refuses or mis-lowers,
 //      not a defect. A defect is a bug in whatever produced it, and patching it
 //      here hides that.

@@ -988,7 +988,7 @@ VARIANTS = {
     # would bridge the two with a LINEARIZATION the scheduler cannot project loop
     # IVs through.
     #
-    # FoldDataMovementGenerics closes it, in the spyrecode stage ahead of the layout
+    # FuseComputeAndDataMovement closes it, in the spyrecode stage ahead of the layout
     # pass: the coordinate change becomes an operand map the layout pass restates at
     # physical rank like any other. What each arm emits, and the checkpoint worth
     # keeping because it is the reason the arms compile:
@@ -1056,7 +1056,7 @@ VARIANTS = {
         "grid":        [1],
         # No tl.program_id, so DistributeWork has nothing to place and there is no
         # scf.for for dbo-opt to refuse. The chain reaches a binary because
-        # FoldDataMovementGenerics folds the statistic broadcast into its consumer's
+        # FuseComputeAndDataMovement folds the statistic broadcast into its consumer's
         # operand map; see the group banner above for the map it lands on.
         "compiles_to_binary": True,
         "output_key":  "out_ptr",
@@ -1134,7 +1134,7 @@ VARIANTS = {
         },
         "grid":        [1],
         # Same as the sibling: no tl.program_id, so no loop to refuse, and what
-        # gets it past the layout pass is FoldDataMovementGenerics ABSORBING the
+        # gets it past the layout pass is FuseComputeAndDataMovement ABSORBING the
         # unit-dim collapse in front of the statistic broadcast. See the group
         # banner for the map.
         "compiles_to_binary": True,
@@ -1238,7 +1238,7 @@ VARIANTS = {
         },
         "grid":        [1],
         # No tl.program_id, so no scf.for for dbo-opt to refuse, and what gets the
-        # statistic read past the layout pass is FoldDataMovementGenerics absorbing
+        # statistic read past the layout pass is FuseComputeAndDataMovement absorbing
         # the unit-dim collapse in front of its broadcast -- the chain group's
         # banner has the map.
         "compiles_to_binary": True,
@@ -1282,10 +1282,11 @@ VARIANTS = {
     #
     # THE RECIPROCAL GROUP CARRIES NO FLOAT IMMEDIATE, and that is load-bearing:
     # ``tl.fdiv(one, s)`` lowers to the UNARY ``spyreop.reciprocal``, not to
-    # ``spyreop.realdiv`` with a ``1.0`` operand, because LowerSpyreOps matches a
-    # numerator of one and drops it. A float immediate reaching the device is not
-    # read back as it was written, so this kernel must not be rewritten in a way
-    # that keeps the constant alive.
+    # ``spyreop.realdiv`` with a ``1.0`` operand, because LowerSpyreOps' group rule
+    # matches the constant and the divide as one group and the device does that
+    # group in one op. A float immediate reaching the device is not read back as it
+    # was written, so this kernel must not be rewritten in a way that keeps the
+    # constant alive.
     "softmax_on_stick": {
         "base": None,
         "tags": ["descriptor-load-static", "descriptor-store-static", "reduce",

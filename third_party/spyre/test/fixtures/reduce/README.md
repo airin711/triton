@@ -192,5 +192,5 @@ and what is new is a SECOND group reading that statistic back and applying it to
 full tile. Both launch. What they needed was not a layout change but a pass:
 reading a statistic back is a Triton broadcast, which used to survive to the
 layout pass as a generic with no descriptor and get bridged with a linearizing
-operand map; `FoldDataMovementGenerics` folds it into its consumer's map instead.
+operand map; `FuseComputeAndDataMovement` folds it into its consumer's map instead.
 The group banner in `meta.py` has the maps and the measurements.
